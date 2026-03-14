@@ -1,11 +1,19 @@
-from __future__ import annotations
 import argparse
 import os
 import re
 import stat
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+
+CHECK_DIRS = [
+    "/etc",
+    "/var",
+    "/home",
+    "/opt",
+    "/srv",
+    "/tmp",
+    "/usr/local",
+]
 
 SKIP_DIRS = {
     "/proc",
@@ -18,64 +26,9 @@ SKIP_DIRS = {
     "/lost+found",
 }
 
-SCAN_DIRS = [
-    "/etc",
-    "/home",
-    "/root",
-    "/opt",
-    "/srv",
-    "/var",
-    "/tmp",
-    "/usr/local",
-]
+NORMAL_WORLD_WRITABLE_DIRS = {"/tmp", "/var/tmp", "/dev/shm"}
 
-KNOWN_PORTS = {
-    21: "FTP",
-    23: "Telnet",
-    25: "SMTP",
-    53: "DNS",
-    80: "HTTP",
-    111: "RPCbind",
-    139: "NetBIOS",
-    445: "SMB",
-    512: "rexec",
-    513: "rlogin",
-    514: "rsh/syslog",
-    873: "rsync",
-    1080: "SOCKS proxy",
-    1433: "MSSQL",
-    1521: "Oracle DB",
-    2049: "NFS",
-    2375: "Docker API",
-    3306: "MySQL/MariaDB",
-    3389: "RDP",
-    5432: "PostgreSQL",
-    5900: "VNC",
-    6379: "Redis",
-    8080: "HTTP-alt",
-    8443: "HTTPS-alt",
-    9200: "Elasticsearch",
-    11211: "Memcached",
-    27017: "MongoDB",
-}
-
-HIGH_RISK_PORTS = {21, 23, 139, 445, 2375, 3306, 5432, 6379, 9200, 11211, 27017}
-
-SUSPICIOUS_CRON_PATTERNS = [
-    r"/tmp/",
-    r"/var/tmp/",
-    r"chmod\s+777",
-    r"chmod\s+666",
-    r"\bcurl\b",
-    r"\bwget\b",
-    r"\bnc\b",
-    r"\bnetcat\b",
-    r"\bbash\s+-c\b",
-    r"\bsh\s+-c\b",
-    r">\s*/dev/tcp/",
-]
-
-CRON_TARGETS = [
+CRON_LOCATIONS = [
     "/etc/crontab",
     "/etc/cron.d",
     "/etc/cron.daily",
@@ -86,18 +39,57 @@ CRON_TARGETS = [
     "/var/spool/cron/crontabs",
 ]
 
-SAFE_WORLD_WRITABLE_DIRS = {"/tmp", "/var/tmp", "/dev/shm"}
-MAX_TEXT_FILE_SIZE = 1024 * 1024
+SUSPICIOUS_NAMES = [
+    "shadow",
+    "passwd",
+    "secret",
+    "token",
+    "key",
+    ".env",
+    "id_rsa",
+    "config",
+    "backup",
+    "bak",
+    "sql",
+]
+
+PORT_INFO = {
+    21: ("FTP", "high", "FTP передаёт данные без шифрования.", "Лучше отключить FTP и использовать SFTP или SSH."),
+    23: ("Telnet", "high", "Telnet передаёт логины и команды в открытом виде.", "Отключите Telnet и оставьте SSH."),
+    69: ("TFTP", "high", "TFTP не использует аутентификацию и шифрование.", "Отключите TFTP, если он не нужен."),
+    80: ("HTTP", "medium", "Веб-служба доступна по сети и требует отдельной проверки.", "Проверьте конфигурацию сайта, web-root и служебные файлы."),
+    111: ("rpcbind", "medium", "rpcbind увеличивает поверхность атаки и часто нужен только вместе с другими службами.", "Ограничьте доступ через firewall или отключите сервис."),
+    139: ("NetBIOS", "high", "Сетевой доступ к NetBIOS лучше ограничивать внутренней сетью.", "Проверьте, нужен ли сервис, и закройте внешний доступ."),
+    445: ("SMB", "high", "Открытый SMB требует жёсткого контроля доступа.", "Ограничьте доступ по IP и проверьте общие ресурсы."),
+    3306: ("MySQL/MariaDB", "high", "СУБД доступна по сети.", "Оставьте доступ только доверенным хостам или привяжите службу к localhost."),
+    5432: ("PostgreSQL", "high", "СУБД доступна по сети.", "Проверьте bind-адрес и правила доступа."),
+    5900: ("VNC", "high", "VNC часто оставляют без достаточной защиты.", "Ограничьте доступ по IP или отключите сервис."),
+    6379: ("Redis", "high", "Redis не должен быть открыт во внешнюю сеть без защиты.", "Привяжите службу к localhost и настройте аутентификацию."),
+    8080: ("HTTP-alt", "medium", "На этом порту часто работают тестовые сервисы и панели.", "Проверьте, что именно слушает порт, и ограничьте доступ."),
+    8443: ("HTTPS-alt", "medium", "На нестандартном HTTPS-порту нередко работают служебные интерфейсы.", "Проверьте назначение сервиса и закройте лишний доступ."),
+    9200: ("Elasticsearch", "high", "Elasticsearch без защиты может раскрывать данные.", "Включите аутентификацию и ограничьте сетевой доступ."),
+    11211: ("Memcached", "high", "Memcached не должен быть доступен извне.", "Оставьте доступ только с localhost или внутренней сети."),
+    27017: ("MongoDB", "high", "MongoDB, открытая по сети, требует обязательной аутентификации.", "Проверьте bindIp и включите аутентификацию."),
+}
+
+CRON_PATTERNS = [
+    (r"/tmp/", "В cron используется путь из /tmp.", "Перенесите скрипт в постоянный каталог и проверьте права доступа."),
+    (r"/var/tmp/", "В cron используется путь из /var/tmp.", "Проверьте, кто может изменять этот файл."),
+    (r"chmod\s+777", "В cron найден chmod 777.", "Замените права 777 на минимально необходимые."),
+    (r"chmod\s+666", "В cron найден chmod 666.", "Замените права 666 на более строгие."),
+    (r"\bcurl\b", "Cron скачивает данные через curl.", "Проверьте источник и необходимость сетевой загрузки."),
+    (r"\bwget\b", "Cron скачивает данные через wget.", "Проверьте источник и по возможности уберите сетевую загрузку."),
+    (r"\bnc\b", "В cron используется netcat.", "Проверьте задачу вручную."),
+    (r"\bnetcat\b", "В cron используется netcat.", "Проверьте задачу вручную."),
+    (r"\bbash\s+-c\b", "Cron запускает команду через bash -c.", "Лучше вынести команду в отдельный скрипт и проверить его права."),
+    (r"\bsh\s+-c\b", "Cron запускает команду через sh -c.", "Лучше вынести команду в отдельный скрипт и проверить его права."),
+]
 
 
-Issue = Dict[str, str]
-
-
-def run_command(command: Sequence[str]) -> str:
-    """Run a command and return stdout. Empty string on failure."""
+def run_command(cmd):
     try:
         result = subprocess.run(
-            command,
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             text=True,
@@ -108,182 +100,221 @@ def run_command(command: Sequence[str]) -> str:
     return result.stdout or ""
 
 
-def is_skipped_path(path: str) -> bool:
-    """Return True if the path belongs to a virtual or irrelevant tree."""
-    absolute = os.path.abspath(path)
-    return any(absolute == base or absolute.startswith(base + os.sep) for base in SKIP_DIRS)
+def skip_path(path):
+    path = os.path.abspath(path)
+    for item in SKIP_DIRS:
+        if path == item or path.startswith(item + os.sep):
+            return True
+    return False
 
 
-def deduplicate(items: List[Issue]) -> List[Issue]:
-    """Remove duplicate dictionaries while preserving order."""
+def add_item(items, section, level, obj, problem, description, recommendation, details=None):
+    entry = {
+        "section": section,
+        "level": level,
+        "object": obj,
+        "problem": problem,
+        "description": description,
+        "recommendation": recommendation,
+        "details": details or {},
+    }
+    items.append(entry)
+
+
+def unique_items(items):
+    result = []
     seen = set()
-    unique: List[Issue] = []
     for item in items:
-        marker = tuple(sorted(item.items()))
-        if marker in seen:
+        key = (
+            item["section"],
+            item["level"],
+            item["object"],
+            item["problem"],
+            item["description"],
+            item["recommendation"],
+            tuple(sorted(item["details"].items())),
+        )
+        if key in seen:
             continue
-        seen.add(marker)
-        unique.append(item)
-    return unique
+        seen.add(key)
+        result.append(item)
+    return result
 
 
-def read_text_file(path: Path) -> str:
-    """Read a small text file, skipping binary files and very large files."""
-    try:
-        if not path.is_file():
-            return ""
-        if path.stat().st_size > MAX_TEXT_FILE_SIZE:
-            return ""
-        with path.open("rb") as handle:
-            sample = handle.read(4096)
-            if b"\x00" in sample:
-                return ""
-    except OSError:
-        return ""
+def level_name(level):
+    if level == "high":
+        return "HIGH"
+    if level == "medium":
+        return "MEDIUM"
+    return "LOW"
 
-    for encoding in ("utf-8", "latin-1", "cp1251"):
+
+def looks_sensitive(path):
+    name = os.path.basename(path).lower()
+    for part in SUSPICIOUS_NAMES:
+        if part in name:
+            return True
+    return False
+
+
+def walk_paths():
+    for base in CHECK_DIRS:
+        if not os.path.exists(base) or skip_path(base):
+            continue
+        for root, dirs, files in os.walk(base, topdown=True, followlinks=False):
+            dirs[:] = [d for d in dirs if not skip_path(os.path.join(root, d))]
+            for dirname in dirs:
+                yield os.path.join(root, dirname), True
+            for filename in files:
+                yield os.path.join(root, filename), False
+
+
+def check_permissions():
+    items = []
+
+    for path, is_dir in walk_paths():
         try:
-            return path.read_text(encoding=encoding, errors="ignore")
+            mode = stat.S_IMODE(os.lstat(path).st_mode)
         except OSError:
             continue
-    return ""
 
+        mode_text = oct(mode)
 
-def parse_listening_ports() -> List[Issue]:
-    """Parse listening sockets from ss or netstat output."""
-    output = run_command(["ss", "-tulpn"])
-    if not output:
-        output = run_command(["netstat", "-tulpn"])
-
-    findings: List[Issue] = []
-    for raw_line in output.splitlines():
-        line = raw_line.strip()
-        lower = line.lower()
-        if not line:
+        if is_dir:
+            if mode & 0o002:
+                sticky_bit = bool(mode & stat.S_ISVTX)
+                level = "medium"
+                if path not in NORMAL_WORLD_WRITABLE_DIRS and not sticky_bit:
+                    level = "high"
+                add_item(
+                    items,
+                    "permissions",
+                    level,
+                    path,
+                    "Каталог открыт на запись для всех",
+                    "Каталог может изменять любой пользователь системы.",
+                    "Проверьте, нужны ли такие права. Обычно достаточно 755, а для закрытых каталогов 750.",
+                    {"Права": mode_text},
+                )
             continue
-        if "listen" not in lower and not lower.startswith("udp"):
+
+        if mode == 0o777:
+            add_item(
+                items,
+                "permissions",
+                "high",
+                path,
+                "Файл с правами 777",
+                "Файл доступен всем на чтение, запись и выполнение.",
+                "Уменьшите права до минимально необходимых, например 644, 640 или 600.",
+                {"Права": mode_text},
+            )
+        elif mode == 0o666:
+            add_item(
+                items,
+                "permissions",
+                "high",
+                path,
+                "Файл с правами 666",
+                "Файл доступен всем на чтение и запись.",
+                "Уберите лишние права записи, например установите 644 или 640.",
+                {"Права": mode_text},
+            )
+        elif mode & 0o002:
+            add_item(
+                items,
+                "permissions",
+                "high",
+                path,
+                "Файл открыт на запись для всех",
+                "Обычный файл имеет признак world-writable.",
+                "Уберите право записи для остальных пользователей.",
+                {"Права": mode_text},
+            )
+
+        if (mode & 0o004) and looks_sensitive(path):
+            add_item(
+                items,
+                "permissions",
+                "medium",
+                path,
+                "Подозрительный файл доступен на чтение всем",
+                "Имя файла похоже на конфигурационный, ключевой или резервный.",
+                "Проверьте содержимое файла и при необходимости ограничьте права, например до 640 или 600.",
+                {"Права": mode_text},
+            )
+
+    return unique_items(items)
+
+
+def check_ports():
+    items = []
+    data = run_command(["ss", "-tulpn"])
+    if not data:
+        data = run_command(["netstat", "-tulpn"])
+
+    for line in data.splitlines():
+        low = line.lower()
+        if "listen" not in low and not low.startswith("udp"):
             continue
 
-        match = re.search(r":(\d+)\s", line + " ")
+        match = re.search(r":(\d+)(?:\s|$)", line)
         if not match:
             continue
 
         port = int(match.group(1))
-        process_match = re.search(r'users:\(\("([^"]+)"', line)
-        process_name = process_match.group(1) if process_match else "-"
+        proc = "не определён"
+        proc_match = re.search(r'users:\(\("([^\"]+)"', line)
+        if proc_match:
+            proc = proc_match.group(1)
 
-        if "127.0.0.1:" in line or "[::1]:" in line:
-            bind_scope = "localhost"
+        if "127.0.0.1:" in line or "::1:" in line:
+            bind = "localhost"
         elif "0.0.0.0:" in line or "[::]:" in line or "*:" in line:
-            bind_scope = "all_interfaces"
+            bind = "all_interfaces"
         else:
-            bind_scope = "specific_interface"
+            bind = "specific_address"
 
-        service_name = KNOWN_PORTS.get(port, "Unknown or uncommon service")
-        severity = "info"
-        if port in KNOWN_PORTS:
-            severity = "medium"
-        if port in HIGH_RISK_PORTS and bind_scope == "all_interfaces":
-            severity = "high"
-
-        findings.append(
-            {
-                "type": "open_port",
-                "severity": severity,
-                "target": f"port {port}",
-                "details": f"service={service_name}; bind={bind_scope}; process={process_name}; raw={line}",
-            }
-        )
-
-    return deduplicate(findings)
-
-
-def iter_scan_paths() -> Iterable[str]:
-    """Yield file system paths from the configured trees."""
-    for base in SCAN_DIRS:
-        if not os.path.exists(base) or is_skipped_path(base):
-            continue
-
-        for root, dirs, files in os.walk(base, topdown=True, followlinks=False):
-            dirs[:] = [d for d in dirs if not is_skipped_path(os.path.join(root, d))]
-
-            for directory_name in dirs:
-                yield os.path.join(root, directory_name)
-            for file_name in files:
-                yield os.path.join(root, file_name)
-
-
-def check_permissions() -> List[Issue]:
-    """Find files and directories with dangerous permissions."""
-    findings: List[Issue] = []
-
-    for path_str in iter_scan_paths():
-        try:
-            st = os.lstat(path_str)
-        except OSError:
-            continue
-
-        mode = stat.S_IMODE(st.st_mode)
-        is_directory = stat.S_ISDIR(st.st_mode)
-
-        if is_directory:
-            if mode & 0o002:
-                severity = "medium" if path_str in SAFE_WORLD_WRITABLE_DIRS else "high"
-                sticky = bool(mode & stat.S_ISVTX)
-                findings.append(
-                    {
-                        "type": "world_writable_directory",
-                        "severity": severity if not sticky else "medium",
-                        "target": path_str,
-                        "details": f"mode={oct(mode)}; sticky_bit={'yes' if sticky else 'no'}",
-                    }
+        if port in PORT_INFO:
+            name, level, description, recommendation = PORT_INFO[port]
+            if bind == "localhost" and level == "high":
+                level = "medium"
+                description = "Сервис относится к чувствительным, но сейчас привязан только к localhost. Это безопаснее, но конфигурацию всё равно стоит проверить."
+            add_item(
+                items,
+                "network",
+                level,
+                f"порт {port}",
+                f"Открытый сервис: {name}",
+                description,
+                recommendation,
+                {"Привязка": bind, "Процесс": proc, "Строка": line.strip()},
+            )
+        else:
+            if bind == "all_interfaces":
+                add_item(
+                    items,
+                    "network",
+                    "medium",
+                    f"порт {port}",
+                    "Необычный открытый порт",
+                    "Порт слушает на всех интерфейсах, но не входит в список типовых портов, которые проверяет программа.",
+                    "Проверьте, какой процесс использует этот порт и действительно ли нужен внешний доступ.",
+                    {"Привязка": bind, "Процесс": proc, "Строка": line.strip()},
                 )
-            continue
 
-        if mode & 0o002:
-            findings.append(
-                {
-                    "type": "world_writable_file",
-                    "severity": "high",
-                    "target": path_str,
-                    "details": f"mode={oct(mode)}",
-                }
-            )
-
-        if mode == 0o777:
-            findings.append(
-                {
-                    "type": "file_mode_777",
-                    "severity": "high",
-                    "target": path_str,
-                    "details": "file has mode 0777",
-                }
-            )
-
-        if mode == 0o666:
-            findings.append(
-                {
-                    "type": "file_mode_666",
-                    "severity": "high",
-                    "target": path_str,
-                    "details": "file has mode 0666",
-                }
-            )
-
-    return deduplicate(findings)
+    return unique_items(items)
 
 
-def collect_cron_files() -> List[Path]:
-    """Return cron-related files that exist on the current host."""
-    files: List[Path] = []
-    for target in CRON_TARGETS:
-        path = Path(target)
+def get_cron_files():
+    files = []
+    for location in CRON_LOCATIONS:
+        path = Path(location)
         if not path.exists():
             continue
         if path.is_file():
             files.append(path)
-            continue
-        if path.is_dir():
+        elif path.is_dir():
             try:
                 for item in path.rglob("*"):
                     if item.is_file():
@@ -293,105 +324,157 @@ def collect_cron_files() -> List[Path]:
     return files
 
 
-def check_cron() -> List[Issue]:
-    """Inspect cron files for risky permissions and suspicious commands."""
-    findings: List[Issue] = []
+def read_text(path):
+    try:
+        if not path.is_file() or path.stat().st_size > 1024 * 1024:
+            return ""
+        with open(path, "rb") as fh:
+            sample = fh.read(4096)
+            if b"\x00" in sample:
+                return ""
+    except OSError:
+        return ""
 
-    for cron_file in collect_cron_files():
+    for enc in ("utf-8", "latin-1", "cp1251"):
+        try:
+            return path.read_text(encoding=enc, errors="ignore")
+        except OSError:
+            continue
+    return ""
+
+
+def check_cron():
+    items = []
+
+    for cron_file in get_cron_files():
         try:
             mode = stat.S_IMODE(cron_file.stat().st_mode)
             if mode & 0o002:
-                findings.append(
-                    {
-                        "type": "world_writable_cron",
-                        "severity": "high",
-                        "target": str(cron_file),
-                        "details": f"mode={oct(mode)}",
-                    }
+                add_item(
+                    items,
+                    "cron",
+                    "high",
+                    str(cron_file),
+                    "Cron-файл открыт на запись для всех",
+                    "Файл планировщика может быть изменён любым пользователем.",
+                    "Уберите лишние права записи и проверьте владельца файла.",
+                    {"Права": oct(mode)},
                 )
         except OSError:
             pass
 
-        content = read_text_file(cron_file)
-        if not content:
+        text = read_text(cron_file)
+        if not text:
             continue
 
-        for pattern in SUSPICIOUS_CRON_PATTERNS:
-            if re.search(pattern, content, re.IGNORECASE):
-                findings.append(
-                    {
-                        "type": "suspicious_cron_content",
-                        "severity": "medium",
-                        "target": str(cron_file),
-                        "details": f"matched_pattern={pattern}",
-                    }
+        for pattern, description, recommendation in CRON_PATTERNS:
+            if re.search(pattern, text, re.IGNORECASE):
+                add_item(
+                    items,
+                    "cron",
+                    "medium",
+                    str(cron_file),
+                    "Подозрительное содержимое cron-задачи",
+                    description,
+                    recommendation,
+                    {"Совпадение": pattern},
                 )
 
-    return deduplicate(findings)
+    return unique_items(items)
 
 
-def format_section(title: str, findings: List[Issue]) -> str:
-    """Build a printable section of the final report."""
+def make_section(title, items):
     lines = ["=" * 80, title, "=" * 80]
-    if not findings:
-        lines.append("Nothing found.")
+
+    if not items:
+        lines.append("Ничего подозрительного не найдено.")
         return "\n".join(lines)
 
-    for item in findings:
-        lines.append(f"[{item['severity'].upper()}] {item['type']}")
-        lines.append(f"target: {item['target']}")
-        lines.append(f"details: {item['details']}")
+    number = 1
+    for item in items:
+        lines.append(f"[{number}] Уровень риска: {level_name(item['level'])}")
+        lines.append(f"Проблема: {item['problem']}")
+        lines.append(f"Объект: {item['object']}")
+        if item["details"]:
+            for key, value in item["details"].items():
+                lines.append(f"{key}: {value}")
+        lines.append("")
+        lines.append("Описание:")
+        lines.append(item["description"])
+        lines.append("")
+        lines.append("Рекомендация:")
+        lines.append(item["recommendation"])
         lines.append("-" * 80)
+        number += 1
+
     return "\n".join(lines)
 
 
-def build_report(port_findings: List[Issue], permission_findings: List[Issue], cron_findings: List[Issue]) -> str:
-    """Combine all sections into a single text report."""
+def make_summary(network_items, perm_items, cron_items):
+    high = 0
+    medium = 0
+    low = 0
+
+    for item in network_items + perm_items + cron_items:
+        if item["level"] == "high":
+            high += 1
+        elif item["level"] == "medium":
+            medium += 1
+        else:
+            low += 1
+
+    lines = [
+        "=" * 80,
+        "СВОДКА",
+        "=" * 80,
+        f"Проблем высокого уровня риска: {high}",
+        f"Проблем среднего уровня риска: {medium}",
+        f"Проблем низкого уровня риска: {low}",
+        f"Найдено сетевых замечаний: {len(network_items)}",
+        f"Найдено проблем с правами: {len(perm_items)}",
+        f"Найдено замечаний по cron: {len(cron_items)}",
+    ]
+    return "\n".join(lines)
+
+
+def make_report(network_items, perm_items, cron_items):
     parts = [
-        "Linux basic audit report",
-        format_section("OPEN PORTS", port_findings),
-        format_section("DANGEROUS FILE AND DIRECTORY PERMISSIONS", permission_findings),
-        format_section("CRON CHECK", cron_findings),
-        "=" * 80,
-        "SUMMARY",
-        "=" * 80,
-        f"Open ports: {len(port_findings)}",
-        f"Permission issues: {len(permission_findings)}",
-        f"Cron issues: {len(cron_findings)}",
+        "ОТЧЁТ БАЗОВОГО АУДИТА LINUX-СИСТЕМЫ",
+        make_section("ПРОВЕРКА ОТКРЫТЫХ ПОРТОВ И СЕТЕВЫХ СЕРВИСОВ", network_items),
+        make_section("ПРОВЕРКА ПРАВ ДОСТУПА К ФАЙЛАМ И КАТАЛОГАМ", perm_items),
+        make_section("ПРОВЕРКА CRON-ЗАДАЧ", cron_items),
+        make_summary(network_items, perm_items, cron_items),
     ]
     return "\n\n".join(parts) + "\n"
 
 
-def save_report(report_text: str, output_path: str) -> None:
-    """Write the report to disk."""
-    with open(output_path, "w", encoding="utf-8") as handle:
-        handle.write(report_text)
+def save_report(text, filename):
+    with open(filename, "w", encoding="utf-8") as fh:
+        fh.write(text)
 
 
-def parse_args() -> argparse.Namespace:
-    """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Basic Linux auditor")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Базовый консольный аудитор Linux")
     parser.add_argument(
         "-o",
         "--output",
         default="audit_report.txt",
-        help="path to the output report file (default: audit_report.txt)",
+        help="файл для сохранения отчёта (по умолчанию audit_report.txt)",
     )
     return parser.parse_args()
 
 
-def main() -> None:
-    """Program entry point."""
+def main():
     args = parse_args()
 
-    port_findings = parse_listening_ports()
-    permission_findings = check_permissions()
-    cron_findings = check_cron()
+    network_items = check_ports()
+    perm_items = check_permissions()
+    cron_items = check_cron()
 
-    report_text = build_report(port_findings, permission_findings, cron_findings)
-    print(report_text, end="")
-    save_report(report_text, args.output)
-    print(f"Report saved to: {args.output}")
+    report = make_report(network_items, perm_items, cron_items)
+    print(report, end="")
+    save_report(report, args.output)
+    print("Отчёт сохранён в файл:", args.output)
 
 
 if __name__ == "__main__":
