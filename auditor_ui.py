@@ -268,7 +268,7 @@ class AuditorUI(QMainWindow):
 
         self.update_table()
         self.btn_audit.setEnabled(True)
-        self.btn_audit.setText("устить аудит")
+        self.btn_audit.setText("Запустить аудит")
         self.progress.setVisible(False)
         total_issues = len(self.all_items)
         high_count = sum(1 for i in self.all_items if i["level"] == "high")
