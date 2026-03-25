@@ -8,7 +8,7 @@ from pathlib import Path
 
 try:
     import tkinter as tk
-    from tkinter import filedialog, messagebox, scrolledtext
+    from tkinter import filedialog, messagebox, scrolledtext, ttk
 except ImportError:
     tk = None
 
@@ -483,7 +483,15 @@ class AuditorUI:
 
         self.root = tk.Tk()
         self.root.title("Linux Auditor UI (Kali/Debian)")
-        self.root.geometry("1050x680")
+        self.root.geometry("1200x800")
+        self.root.configure(bg="#f0f0f0")
+
+        # Стили
+        style = ttk.Style()
+        style.configure("TButton", font=("Arial", 10), padding=5)
+        style.configure("TLabel", font=("Arial", 10))
+        style.configure("TCheckbutton", font=("Arial", 10))
+        style.configure("TEntry", font=("Arial", 10))
 
         self.var_ports = tk.BooleanVar(value=True)
         self.var_perm = tk.BooleanVar(value=True)
@@ -493,35 +501,103 @@ class AuditorUI:
         self.search_text = tk.StringVar(value="")
 
         self.all_items = []
+        self.filtered_items = []
 
         self._build_widgets()
 
     def _build_widgets(self):
-        frame_controls = tk.Frame(self.root, padx=8, pady=8)
+        # Верхняя панель управления
+        frame_controls = ttk.Frame(self.root, padding=10)
         frame_controls.pack(side=tk.TOP, fill=tk.X)
 
-        tk.Checkbutton(frame_controls, text="Проверять открытые порты", variable=self.var_ports).grid(row=0, column=0, sticky="w")
-        tk.Checkbutton(frame_controls, text="Проверять права файлов/каталогов", variable=self.var_perm).grid(row=0, column=1, sticky="w")
-        tk.Checkbutton(frame_controls, text="Проверять cron", variable=self.var_cron).grid(row=0, column=2, sticky="w")
+        ttk.Checkbutton(frame_controls, text="Проверять открытые порты", variable=self.var_ports).grid(row=0, column=0, sticky="w", padx=5)
+        ttk.Checkbutton(frame_controls, text="Проверять права файлов/каталогов", variable=self.var_perm).grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Checkbutton(frame_controls, text="Проверять cron", variable=self.var_cron).grid(row=0, column=2, sticky="w", padx=5)
 
-        tk.Button(frame_controls, text="Запустить аудит", command=self.run_audit).grid(row=0, column=3, padx=10)
-        tk.Button(frame_controls, text="Сохранить отчёт", command=self.save_report_dialog).grid(row=0, column=4, padx=10)
+        ttk.Button(frame_controls, text="Запустить аудит", command=self.run_audit).grid(row=0, column=3, padx=10)
+        ttk.Button(frame_controls, text="Сохранить отчёт", command=self.save_report_dialog).grid(row=0, column=4, padx=10)
 
-        tk.Label(frame_controls, text="Фильтр уровня:").grid(row=1, column=0, sticky="e")
-        tk.OptionMenu(frame_controls, self.filter_level, "all", "high", "medium", "low", command=lambda _: self.update_report()).grid(row=1, column=1, sticky="w")
+        ttk.Label(frame_controls, text="Фильтр уровня:").grid(row=1, column=0, sticky="e", pady=5)
+        ttk.OptionMenu(frame_controls, self.filter_level, "all", "high", "medium", "low", command=lambda _: self.update_report()).grid(row=1, column=1, sticky="w", padx=5)
 
-        tk.Label(frame_controls, text="Поиск/фильтр по тексту:").grid(row=1, column=2, sticky="e")
-        tk.Entry(frame_controls, textvariable=self.search_text, width=30).grid(row=1, column=3, sticky="w")
-        tk.Button(frame_controls, text="Применить фильтр", command=self.update_report).grid(row=1, column=4, padx=10)
+        ttk.Label(frame_controls, text="Поиск/фильтр по тексту:").grid(row=1, column=2, sticky="e", pady=5)
+        ttk.Entry(frame_controls, textvariable=self.search_text, width=30).grid(row=1, column=3, sticky="w", padx=5)
+        ttk.Button(frame_controls, text="Применить фильтр", command=self.update_report).grid(row=1, column=4, padx=10)
 
-        tk.Button(frame_controls, text="Открыть путь выбранной строки", command=self.open_selected_object).grid(row=1, column=5, padx=10)
+        # Контейнер для плиток
+        self.frame_tiles = ttk.Frame(self.root)
+        self.frame_tiles.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self.text_report = scrolledtext.ScrolledText(self.root, wrap=tk.WORD, font=("Consolas", 10))
-        self.text_report.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=8)
+        # Canvas для скроллинга
+        self.canvas = tk.Canvas(self.frame_tiles, bg="#f0f0f0")
+        self.scrollbar = ttk.Scrollbar(self.frame_tiles, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = ttk.Frame(self.canvas)
+
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
+
+        # Привязка скроллинга
+        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+
+    def _on_mousewheel(self, event):
+        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+
+    def create_tile(self, item):
+        # Цвета для уровней
+        colors = {
+            "high": "#ffcccc",
+            "medium": "#ffffcc",
+            "low": "#ccffcc"
+        }
+        bg_color = colors.get(item["level"], "#ffffff")
+
+        frame = tk.Frame(self.scrollable_frame, bg=bg_color, relief="raised", borderwidth=2, padx=10, pady=10)
+        frame.pack(fill=tk.X, pady=5, padx=5)
+
+        # Заголовок
+        title = f"{level_name(item['level'])}: {item['problem']}"
+        lbl_title = tk.Label(frame, text=title, font=("Arial", 12, "bold"), bg=bg_color, fg="#333")
+        lbl_title.pack(anchor="w")
+
+        # Объект
+        lbl_obj = tk.Label(frame, text=f"Объект: {item['object']}", font=("Arial", 10), bg=bg_color, fg="#555")
+        lbl_obj.pack(anchor="w")
+
+        # Описание
+        lbl_desc = tk.Label(frame, text=f"Описание: {item['description']}", font=("Arial", 10), bg=bg_color, wraplength=600, justify="left")
+        lbl_desc.pack(anchor="w", pady=5)
+
+        # Рекомендация
+        lbl_rec = tk.Label(frame, text=f"Рекомендация: {item['recommendation']}", font=("Arial", 10), bg=bg_color, wraplength=600, justify="left")
+        lbl_rec.pack(anchor="w", pady=5)
+
+        # Детали
+        if item["details"]:
+            details_text = "\n".join([f"{k}: {v}" for k, v in item["details"].items()])
+            lbl_details = tk.Label(frame, text=details_text, font=("Arial", 9), bg=bg_color, fg="#777")
+            lbl_details.pack(anchor="w")
+
+        # Кнопка открыть
+        btn_open = ttk.Button(frame, text="Открыть путь", command=lambda: self.open_object(item['object']))
+        btn_open.pack(anchor="e", pady=5)
 
     def run_audit(self):
-        self.text_report.delete("1.0", tk.END)
-        self.text_report.insert(tk.END, "Собираем данные, пожалуйста подождите...\n")
+        # Очистить плитки
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
+
+        # Показать сообщение о загрузке
+        loading_frame = tk.Frame(self.scrollable_frame, bg="#f0f0f0", padx=20, pady=20)
+        loading_frame.pack(fill=tk.X)
+        tk.Label(loading_frame, text="Собираем данные, пожалуйста подождите...", font=("Arial", 12), bg="#f0f0f0").pack()
         self.root.update()
 
         network_items = []
@@ -550,6 +626,9 @@ class AuditorUI:
         self.perm_items = perm_items
         self.cron_items = cron_items
 
+        # Убрать сообщение о загрузке
+        loading_frame.destroy()
+
         self.update_report()
 
     def update_report(self):
@@ -564,57 +643,41 @@ class AuditorUI:
                 return search in haystack
             return True
 
-        filtered = [item for item in self.all_items if included(item)]
+        self.filtered_items = [item for item in self.all_items if included(item)]
 
-        report = make_report(
-            [i for i in self.network_items if included(i)],
-            [i for i in self.perm_items if included(i)],
-            [i for i in self.cron_items if included(i)],
-        )
+        # Очистить плитки
+        for widget in self.scrollable_frame.winfo_children():
+            widget.destroy()
 
-        self.text_report.delete("1.0", tk.END)
-        self.text_report.insert(tk.END, report)
-
+        # Создать плитки
         if not self.all_items:
-            self.text_report.insert(tk.END, "\nСначала нажмите 'Запустить аудит'.\n")
+            no_audit_frame = tk.Frame(self.scrollable_frame, bg="#f0f0f0", padx=20, pady=20)
+            no_audit_frame.pack(fill=tk.X)
+            tk.Label(no_audit_frame, text="Сначала нажмите 'Запустить аудит'.", font=("Arial", 12), bg="#f0f0f0").pack()
+        elif not self.filtered_items:
+            no_items_frame = tk.Frame(self.scrollable_frame, bg="#f0f0f0", padx=20, pady=20)
+            no_items_frame.pack(fill=tk.X)
+            tk.Label(no_items_frame, text="Нет элементов, соответствующих фильтру.", font=("Arial", 12), bg="#f0f0f0").pack()
+        else:
+            for item in self.filtered_items:
+                self.create_tile(item)
 
-    def open_selected_object(self):
-        if not self.all_items:
-            messagebox.showinfo("Инфо", "Сначала выполните аудит и выберите объект.")
+        # Обновить скролл
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def open_object(self, obj_path):
+        if not os.path.exists(obj_path):
+            messagebox.showwarning("Путь не найден", f"Путь не существует: {obj_path}")
             return
 
-        selected = self.text_report.selection_get() if self.text_report.tag_ranges(tk.SEL) else ""
-        target_path = None
-
-        if selected:
-            for part in selected.splitlines():
-                if part.strip().startswith("Объект:"):
-                    target_path = part.split("Объект:", 1)[1].strip()
-                    break
-
-        if not target_path:
-            full_line = self.text_report.get("insert linestart", "insert lineend").strip()
-            if full_line.startswith("Объект:"):
-                target_path = full_line.split("Объект:", 1)[1].strip()
-
-        if not target_path:
-            messagebox.showwarning("Не найден объект", "выделите строку с 'Объект:' в отчёте")
-            return
-
-        if not os.path.exists(target_path):
-            messagebox.showwarning("Путь не найден", f"Путь не существует: {target_path}")
-            return
+        # Открыть директорию в проводнике
+        dir_path = os.path.dirname(obj_path) if os.path.isfile(obj_path) else obj_path
 
         try:
-            subprocess.Popen(["xdg-open", target_path])
-        except Exception:
-            try:
-                subprocess.Popen(["xdg-open", os.path.dirname(target_path)])
-            except Exception as exc:
-                messagebox.showerror("Ошибка", f"Не удалось открыть путь: {exc}")
-                return
-
-        messagebox.showinfo("Открыто", f"Открывается: {target_path}")
+            subprocess.Popen(["xdg-open", dir_path])
+            messagebox.showinfo("Открыто", f"Открыта директория: {dir_path}")
+        except Exception as exc:
+            messagebox.showerror("Ошибка", f"Не удалось открыть директорию: {exc}")
 
     def save_report_dialog(self):
         path = filedialog.asksaveasfilename(
@@ -626,7 +689,12 @@ class AuditorUI:
         if not path:
             return
 
-        report = self.text_report.get("1.0", tk.END)
+        # Генерировать отчёт из текущих фильтрованных элементов
+        filtered_network = [i for i in self.network_items if i in self.filtered_items]
+        filtered_perm = [i for i in self.perm_items if i in self.filtered_items]
+        filtered_cron = [i for i in self.cron_items if i in self.filtered_items]
+
+        report = make_report(filtered_network, filtered_perm, filtered_cron)
         try:
             save_report(report, path)
             messagebox.showinfo("Сохранено", f"Отчёт сохранён в: {path}")
