@@ -214,11 +214,16 @@ class AuditorUI(QMainWindow):
         self.table = QTableWidget()
         self.table.setColumnCount(6)
         self.table.setHorizontalHeaderLabels(["Уровень", "Проблема", "Объект", "Описание", "Рекомендация", "Флажок"])
-        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setColumnWidth(5, 100)  # Флажок
+        self.table.setColumnWidth(5, 15)  # Флажок
         table_layout.addWidget(self.table)
 
         layout.addWidget(table_group)
@@ -290,17 +295,17 @@ class AuditorUI(QMainWindow):
         for row, item in enumerate(self.filtered_items):
             # Флажок
             indicator = QLabel()
-            indicator.setFixedSize(4, 20)
+            indicator.setFixedSize(8, 20)
             if item["level"] == "critical":
-                indicator.setStyleSheet("background-color: #ff4444; border: 1px solid #333;")
+                indicator.setStyleSheet("background-color: #ff4444; border: 1px solid #333; border-radius: 2px;")
             elif item["level"] == "high":
-                indicator.setStyleSheet("background-color: #ff8800; border: 1px solid #333;")
+                indicator.setStyleSheet("background-color: #ff8800; border: 1px solid #333; border-radius: 2px;")
             elif item["level"] == "medium":
-                indicator.setStyleSheet("background-color: #ffff00; border: 1px solid #333;")
+                indicator.setStyleSheet("background-color: #ffff00; border: 1px solid #333; border-radius: 2px;")
             elif item["level"] == "low":
-                indicator.setStyleSheet("background-color: #4444ff; border: 1px solid #333;")
+                indicator.setStyleSheet("background-color: #4444ff; border: 1px solid #333; border-radius: 2px;")
             else:  # info
-                indicator.setStyleSheet("background-color: #888888; border: 1px solid #333;")
+                indicator.setStyleSheet("background-color: #888888; border: 1px solid #333; border-radius: 2px;")
             self.table.setCellWidget(row, 5, indicator)
 
             self.table.setItem(row, 0, QTableWidgetItem(level_name(item["level"])))
