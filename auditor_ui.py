@@ -524,70 +524,53 @@ class AuditorUI:
         ttk.Entry(frame_controls, textvariable=self.search_text, width=30).grid(row=1, column=3, sticky="w", padx=5)
         ttk.Button(frame_controls, text="Применить фильтр", command=self.update_report).grid(row=1, column=4, padx=10)
 
-        # Контейнер для плиток
+        # Контейнер для плиток - теперь Treeview
         self.frame_tiles = ttk.Frame(self.root)
         self.frame_tiles.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        # Canvas для скроллинга
-        self.canvas = tk.Canvas(self.frame_tiles, bg="#f0f0f0")
-        self.scrollbar = ttk.Scrollbar(self.frame_tiles, orient="vertical", command=self.canvas.yview)
-        self.scrollable_frame = ttk.Frame(self.canvas)
+        # Treeview для уязвимостей
+        columns = ("level", "problem", "object", "description", "recommendation")
+        self.tree = ttk.Treeview(self.frame_tiles, columns=columns, show="headings", height=20)
+        self.tree.heading("level", text="Уровень")
+        self.tree.heading("problem", text="Проблема")
+        self.tree.heading("object", text="Объект")
+        self.tree.heading("description", text="Описание")
+        self.tree.heading("recommendation", text="Рекомендация")
 
-        self.scrollable_frame.bind(
-            "<Configure>",
-            lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all"))
-        )
+        self.tree.column("level", width=80)
+        self.tree.column("problem", width=200)
+        self.tree.column("object", width=300)
+        self.tree.column("description", width=400)
+        self.tree.column("recommendation", width=400)
 
-        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
-        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        # Scrollbars
+        v_scroll = ttk.Scrollbar(self.frame_tiles, orient="vertical", command=self.tree.yview)
+        h_scroll = ttk.Scrollbar(self.frame_tiles, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
 
-        self.canvas.pack(side="left", fill="both", expand=True)
-        self.scrollbar.pack(side="right", fill="y")
+        self.tree.pack(side="left", fill="both", expand=True)
+        v_scroll.pack(side="right", fill="y")
+        h_scroll.pack(side="bottom", fill="x")
 
-        # Привязка скроллинга
-        self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        # Контекстное меню
+        self.context_menu = tk.Menu(self.root, tearoff=0)
+        self.context_menu.add_command(label="Открыть путь", command=self.open_selected_item)
+        self.tree.bind("<Button-3>", self.show_context_menu)
 
-    def _on_mousewheel(self, event):
-        self.canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    def show_context_menu(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.context_menu.post(event.x_root, event.y_root)
 
-    def create_tile(self, item):
-        # Цвета для уровней
-        colors = {
-            "high": "#ffcccc",
-            "medium": "#ffffcc",
-            "low": "#ccffcc"
-        }
-        bg_color = colors.get(item["level"], "#ffffff")
-
-        frame = tk.Frame(self.scrollable_frame, bg=bg_color, relief="raised", borderwidth=2, padx=10, pady=10)
-        frame.pack(fill=tk.X, pady=5, padx=5)
-
-        # Заголовок
-        title = f"{level_name(item['level'])}: {item['problem']}"
-        lbl_title = tk.Label(frame, text=title, font=("Arial", 12, "bold"), bg=bg_color, fg="#333")
-        lbl_title.pack(anchor="w")
-
-        # Объект
-        lbl_obj = tk.Label(frame, text=f"Объект: {item['object']}", font=("Arial", 10), bg=bg_color, fg="#555")
-        lbl_obj.pack(anchor="w")
-
-        # Описание
-        lbl_desc = tk.Label(frame, text=f"Описание: {item['description']}", font=("Arial", 10), bg=bg_color, wraplength=600, justify="left")
-        lbl_desc.pack(anchor="w", pady=5)
-
-        # Рекомендация
-        lbl_rec = tk.Label(frame, text=f"Рекомендация: {item['recommendation']}", font=("Arial", 10), bg=bg_color, wraplength=600, justify="left")
-        lbl_rec.pack(anchor="w", pady=5)
-
-        # Детали
-        if item["details"]:
-            details_text = "\n".join([f"{k}: {v}" for k, v in item["details"].items()])
-            lbl_details = tk.Label(frame, text=details_text, font=("Arial", 9), bg=bg_color, fg="#777")
-            lbl_details.pack(anchor="w")
-
-        # Кнопка открыть
-        btn_open = ttk.Button(frame, text="Открыть путь", command=lambda: self.open_object(item['object']))
-        btn_open.pack(anchor="e", pady=5)
+    def open_selected_item(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("Инфо", "Выберите элемент в списке.")
+            return
+        item = self.tree.item(selected[0])
+        obj_path = item['values'][2]  # object column
+        self.open_object(obj_path)
 
     def run_audit(self):
         # Очистить плитки
@@ -645,25 +628,24 @@ class AuditorUI:
 
         self.filtered_items = [item for item in self.all_items if included(item)]
 
-        # Очистить плитки
-        for widget in self.scrollable_frame.winfo_children():
-            widget.destroy()
+        # Очистить Treeview
+        for i in self.tree.get_children():
+            self.tree.delete(i)
 
-        # Создать плитки
-        if not self.all_items:
-            no_audit_frame = tk.Frame(self.scrollable_frame, bg="#f0f0f0", padx=20, pady=20)
-            no_audit_frame.pack(fill=tk.X)
-            tk.Label(no_audit_frame, text="Сначала нажмите 'Запустить аудит'.", font=("Arial", 12), bg="#f0f0f0").pack()
-        elif not self.filtered_items:
-            no_items_frame = tk.Frame(self.scrollable_frame, bg="#f0f0f0", padx=20, pady=20)
-            no_items_frame.pack(fill=tk.X)
-            tk.Label(no_items_frame, text="Нет элементов, соответствующих фильтру.", font=("Arial", 12), bg="#f0f0f0").pack()
-        else:
-            for item in self.filtered_items:
-                self.create_tile(item)
+        # Заполнить Treeview
+        for item in self.filtered_items:
+            self.tree.insert("", "end", values=(
+                level_name(item["level"]),
+                item["problem"],
+                item["object"],
+                item["description"],
+                item["recommendation"]
+            ), tags=(item["level"],))
 
-        # Обновить скролл
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+        # Цвета для тегов
+        self.tree.tag_configure("high", background="#ffcccc")
+        self.tree.tag_configure("medium", background="#ffffcc")
+        self.tree.tag_configure("low", background="#ccffcc")
 
     def open_object(self, obj_path):
         if not os.path.exists(obj_path):
@@ -708,7 +690,7 @@ class AuditorUI:
 def main():
     args = parse_args()
 
-    if args.nogui:
+    if args.nogui or not tk or not os.environ.get('DISPLAY'):
         network_items = check_ports()
         perm_items = check_permissions()
         cron_items = check_cron()
@@ -718,10 +700,6 @@ def main():
         save_report(report, args.output)
         print("Отчёт сохранён в файл:", args.output)
         return
-
-    if not tk:
-        print("Tkinter не установлен, запустите с --nogui")
-        sys.exit(1)
 
     ui = AuditorUI()
     ui.run()
