@@ -213,12 +213,12 @@ class AuditorUI(QMainWindow):
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Индикатор", "Уровень", "Проблема", "Объект", "Описание", "Рекомендация"])
+        self.table.setHorizontalHeaderLabels(["Уровень", "Проблема", "Объект", "Описание", "Рекомендация", "Флажок"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setColumnWidth(0, 100)  # Индикатор
+        self.table.setColumnWidth(5, 100)  # Флажок
         table_layout.addWidget(self.table)
 
         layout.addWidget(table_group)
@@ -268,11 +268,11 @@ class AuditorUI(QMainWindow):
 
         self.update_table()
         self.btn_audit.setEnabled(True)
-        self.btn_audit.setText("🚀 Запустить аудит")
+        self.btn_audit.setText("устить аудит")
         self.progress.setVisible(False)
         total_issues = len(self.all_items)
         high_count = sum(1 for i in self.all_items if i["level"] == "high")
-        self.status_bar.showMessage(f"✅ Аудит завершён. Найдено проблем: {total_issues} (высокий риск: {high_count})")
+        self.status_bar.showMessage(f"Аудит завершён. Найдено проблем: {total_issues} (высокий риск: {high_count})")
 
     def update_table(self):
         level_filter = self.cmb_level.currentText()
@@ -288,25 +288,26 @@ class AuditorUI(QMainWindow):
 
         self.table.setRowCount(len(self.filtered_items))
         for row, item in enumerate(self.filtered_items):
-            # Индикатор
-            indicator = QLabel("●")
+            # Флажок
+            indicator = QLabel()
+            indicator.setFixedSize(20, 20)
             if item["level"] == "critical":
-                indicator.setStyleSheet("color: red; font-size: 16px;")
+                indicator.setStyleSheet("background-color: #ff4444; border: 1px solid #333;")
             elif item["level"] == "high":
-                indicator.setStyleSheet("color: orange; font-size: 16px;")
+                indicator.setStyleSheet("background-color: #ff8800; border: 1px solid #333;")
             elif item["level"] == "medium":
-                indicator.setStyleSheet("color: yellow; font-size: 16px;")
+                indicator.setStyleSheet("background-color: #ffff00; border: 1px solid #333;")
             elif item["level"] == "low":
-                indicator.setStyleSheet("color: blue; font-size: 16px;")
+                indicator.setStyleSheet("background-color: #4444ff; border: 1px solid #333;")
             else:  # info
-                indicator.setStyleSheet("color: gray; font-size: 16px;")
-            self.table.setCellWidget(row, 0, indicator)
+                indicator.setStyleSheet("background-color: #888888; border: 1px solid #333;")
+            self.table.setCellWidget(row, 5, indicator)
 
-            self.table.setItem(row, 1, QTableWidgetItem(level_name(item["level"])))
-            self.table.setItem(row, 2, QTableWidgetItem(item["problem"]))
-            self.table.setItem(row, 3, QTableWidgetItem(item["object"]))
-            self.table.setItem(row, 4, QTableWidgetItem(item["description"]))
-            self.table.setItem(row, 5, QTableWidgetItem(item["recommendation"]))
+            self.table.setItem(row, 0, QTableWidgetItem(level_name(item["level"])))
+            self.table.setItem(row, 1, QTableWidgetItem(item["problem"]))
+            self.table.setItem(row, 2, QTableWidgetItem(item["object"]))
+            self.table.setItem(row, 3, QTableWidgetItem(item["description"]))
+            self.table.setItem(row, 4, QTableWidgetItem(item["recommendation"]))
 
             # Цвета строк
             color = {
@@ -317,7 +318,7 @@ class AuditorUI(QMainWindow):
                 "info": QColor("#666666")
             }.get(item["level"], QColor("#666666"))
 
-            for col in range(1, 6):  # Пропускаем индикатор в col 0
+            for col in range(5):
                 self.table.item(row, col).setBackground(color)
 
         self.table.resizeColumnsToContents()
