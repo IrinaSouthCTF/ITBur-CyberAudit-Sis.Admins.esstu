@@ -9,6 +9,7 @@ import subprocess
 import sys
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 CHECK_DIRS = [
@@ -110,8 +111,23 @@ CVE_SERVICE_DB = {
 }
 
 CVE_DB_FILENAME = "cve_db.json"
-CVE_DB_URL = "https://example.com/cve_db.json"
+# Публичный NVD API
+NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/1.0"
+# Носитель ключа: переменная окружения NVD_API_KEY (необязательна, но рекомендуется)
+
 CVE_DB_TTL_DAYS = 7
+CPE_MAP = {
+    22: "cpe:2.3:a:openbsd:openssh",
+    21: "cpe:2.3:a:wu:ftp",  # примеры
+    23: "cpe:2.3:a:netkit:telnet",
+    80: "cpe:2.3:a:apache:http_server",
+    3306: "cpe:2.3:a:mysql:mysql",
+    5432: "cpe:2.3:a:postgresql:postgresql",
+    5900: "cpe:2.3:a:realvnc:vnc_connect",
+    6379: "cpe:2.3:a:redis:redis",
+    9200: "cpe:2.3:a:elastic:elasticsearch",
+    27017: "cpe:2.3:a:mongodb:mongodb",
+}
 
 
 def get_cve_db_path():
@@ -157,48 +173,130 @@ def is_cve_db_stale(cve_meta, ttl_days=CVE_DB_TTL_DAYS):
     return delta.days >= ttl_days
 
 
-def download_cve_db(url=CVE_DB_URL, timeout=15):
+def cve_score_to_level(score):
+    if score is None:
+        return "medium"
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "LinuxAuditor/1.0"})
+        score = float(score)
+    except (TypeError, ValueError):
+        return "medium"
+    if score >= 9.0:
+        return "high"
+    if score >= 7.0:
+        return "medium"
+    if score >= 4.0:
+        return "low"
+    return "info"
+
+
+def query_nvd_api(cpe_name, results_per_page=200, timeout=30):
+    params = {
+        "cpeName": cpe_name,
+        "resultsPerPage": str(results_per_page),
+    }
+    url = NVD_API_URL + "?" + urllib.parse.urlencode(params)
+    headers = {
+        "User-Agent": "LinuxAuditor/1.0",
+    }
+    api_key = os.environ.get("NVD_API_KEY")
+    if api_key:
+        headers["apiKey"] = api_key
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
                 return None
             data = resp.read()
-            cve_db = json.loads(data.decode("utf-8"))
-            return cve_db
-    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, socket.timeout, ValueError):
+            return json.loads(data.decode("utf-8"))
+    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, ValueError):
         return None
+
+
+def build_cve_items_from_nvd(nvd_response):
+    if not isinstance(nvd_response, dict):
+        return []
+    results = []
+    items = nvd_response.get("result", {}).get("CVE_Items", [])
+    for item in items:
+        cve_meta = item.get("cve", {}).get("CVE_data_meta", {})
+        if not cve_meta:
+            continue
+
+        cve_id = cve_meta.get("ID", "unknown")
+        descriptions = item.get("cve", {}).get("description", {}).get("description_data", [])
+        description = next((d.get("value") for d in descriptions if d.get("value")), "Неизвестная уязвимость")
+
+        impact = item.get("impact", {})
+        score = None
+        if "baseMetricV3" in impact and impact["baseMetricV3"].get("cvssV3"):
+            score = impact["baseMetricV3"]["cvssV3"].get("baseScore")
+        elif "baseMetricV2" in impact and impact["baseMetricV2"].get("cvssV2"):
+            score = impact["baseMetricV2"]["cvssV2"].get("baseScore")
+
+        level = cve_score_to_level(score)
+
+        recommendations = []
+        plaque = item.get("cve", {}).get("problemtype", {}).get("problemtype_data", [])
+        if plaque:
+            recommendations.append("Проверьте наличие обновлений и конфигурацию.")
+
+        results.append({
+            "id": cve_id,
+            "service": "",
+            "level": level,
+            "description": description,
+            "recommendation": "; ".join(recommendations) or "Обновите и примените патчи.",
+        })
+
+    return results
+
+
+def fetch_nvd_cve_db(timeout=30):
+    cve_data = {}
+    for port, cpe in CPE_MAP.items():
+        nvd = query_nvd_api(cpe, timeout=timeout)
+        if not nvd:
+            continue
+        items = build_cve_items_from_nvd(nvd)
+        if items:
+            for element in items:
+                element["service"] = CPE_MAP.get(port, "unknown")
+            cve_data[port] = items
+
+    if not cve_data:
+        return None
+
+    return {"data": cve_data, "meta": {"source": "nvd", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
 
 
 def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True):
     local = load_local_cve_db()
+
+    def save_and_return(db, src):
+        db.setdefault("meta", {})
+        db["meta"].update({"source": src, "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+        save_local_cve_db(db)
+        return db
+
     if force_update and allow_online:
-        remote = download_cve_db()
+        remote = fetch_nvd_cve_db()
         if remote:
-            remote.setdefault("meta", {})
-            remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
-            save_local_cve_db(remote)
-            return remote
+            return save_and_return(remote, "nvd")
 
     if local:
         meta = local.get("meta", {})
         stale = is_cve_db_stale(meta, ttl_days)
         if stale and allow_online:
-            remote = download_cve_db()
+            remote = fetch_nvd_cve_db()
             if remote:
-                remote.setdefault("meta", {})
-                remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
-                save_local_cve_db(remote)
-                return remote
+                return save_and_return(remote, "nvd")
         return local
 
     if allow_online:
-        remote = download_cve_db()
+        remote = fetch_nvd_cve_db()
         if remote:
-            remote.setdefault("meta", {})
-            remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
-            save_local_cve_db(remote)
-            return remote
+            return save_and_return(remote, "nvd")
 
     return {"data": CVE_SERVICE_DB, "meta": {"source": "builtin", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
 
