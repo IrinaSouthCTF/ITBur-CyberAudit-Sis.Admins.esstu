@@ -248,6 +248,14 @@ def check_permissions():
     return unique_items(items)
 
 
+def has_drop_rule(port):
+    data = run_command(["sudo", "iptables", "-L", "INPUT", "-n"])
+    for line in data.splitlines():
+        if f"dpt:{port}" in line and "DROP" in line:
+            return True
+    return False
+
+
 def check_ports():
     items = []
     data = run_command(["ss", "-tulpn"])
@@ -264,6 +272,9 @@ def check_ports():
             continue
 
         port = int(match.group(1))
+        if has_drop_rule(port):
+            continue  # Порт заблокирован firewall'ом, пропускаем
+
         proc = "не определён"
         proc_match = re.search(r'users:\(\("([^\"]+)"', line)
         if proc_match:
@@ -300,7 +311,7 @@ def check_ports():
                     f"порт {port}",
                     "Необычный открытый порт",
                     "Порт слушает на всех интерфейсах, но не входит в список типовых портов, которые проверяет программа.",
-                    f"sudo ufw deny {port}/tcp",
+                    f"sudo iptables -A INPUT -p tcp --dport {port} -j DROP",
                     {"Привязка": bind, "Процесс": proc, "Строка": line.strip()},
                 )
 
