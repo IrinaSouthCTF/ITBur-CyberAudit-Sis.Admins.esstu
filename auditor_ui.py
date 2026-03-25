@@ -214,7 +214,7 @@ class AuditorUI(QMainWindow):
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Уровень", "Проблема", "Объект", "Описание", "Рекомендация", "Флажок"])
+        self.table.setHorizontalHeaderLabels(["Уровень", "Проблема", "Объект", "Описание", "Команда", "Флажок"])
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -222,6 +222,7 @@ class AuditorUI(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
         self.table.setSortingEnabled(True)
+        self.table.cellClicked.connect(self.on_cell_clicked)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -344,6 +345,13 @@ class AuditorUI(QMainWindow):
             QMessageBox.information(self, "Успех", f"Открыта директория: {dir_path}")
         except Exception as e:
             QMessageBox.critical(self, "Ошибка", f"Не удалось открыть директорию: {e}")
+
+    def on_cell_clicked(self, row, col):
+        if col == 4:  # Команда
+            item = self.table.item(row, col)
+            if item:
+                QApplication.clipboard().setText(item.text())
+                self.status_bar.showMessage("Команда скопирована в буфер обмена", 3000)
 
     def save_report_dialog(self):
         path, _ = QFileDialog.getSaveFileName(
