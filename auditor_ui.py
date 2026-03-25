@@ -5,7 +5,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QCheckBox,
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QTextEdit,
     QFileDialog, QMessageBox, QSplitter, QFrame, QLabel, QLineEdit, QComboBox,
-    QProgressBar, QStatusBar, QGroupBox
+    QProgressBar, QStatusBar, QGroupBox, QSizePolicy
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QPalette, QColor, QIcon, QPixmap
@@ -295,7 +295,7 @@ class AuditorUI(QMainWindow):
         for row, item in enumerate(self.filtered_items):
             # Флажок
             indicator = QLabel()
-            indicator.setFixedSize(8, 20)
+            indicator.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             if item["level"] == "critical":
                 indicator.setStyleSheet("background-color: #ff4444; border: 1px solid #333; border-radius: 2px;")
             elif item["level"] == "high":
