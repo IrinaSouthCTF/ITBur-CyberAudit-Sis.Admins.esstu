@@ -212,12 +212,13 @@ class AuditorUI(QMainWindow):
         table_layout = QVBoxLayout(table_group)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["⚠️ Уровень", "🔍 Проблема", "📁 Объект", "📝 Описание", "💡 Рекомендация"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Индикатор", "Уровень", "Проблема", "Объект", "Описание", "Рекомендация"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setColumnWidth(0, 100)  # Индикатор
         table_layout.addWidget(self.table)
 
         layout.addWidget(table_group)
@@ -287,28 +288,36 @@ class AuditorUI(QMainWindow):
 
         self.table.setRowCount(len(self.filtered_items))
         for row, item in enumerate(self.filtered_items):
-            level_text = level_name(item["level"])
-            if item["level"] == "high":
-                level_text = "🔴 " + level_text
+            # Индикатор
+            indicator = QLabel("●")
+            if item["level"] == "critical":
+                indicator.setStyleSheet("color: red; font-size: 16px;")
+            elif item["level"] == "high":
+                indicator.setStyleSheet("color: orange; font-size: 16px;")
             elif item["level"] == "medium":
-                level_text = "🟡 " + level_text
-            else:
-                level_text = "🟢 " + level_text
+                indicator.setStyleSheet("color: yellow; font-size: 16px;")
+            elif item["level"] == "low":
+                indicator.setStyleSheet("color: blue; font-size: 16px;")
+            else:  # info
+                indicator.setStyleSheet("color: gray; font-size: 16px;")
+            self.table.setCellWidget(row, 0, indicator)
 
-            self.table.setItem(row, 0, QTableWidgetItem(level_text))
-            self.table.setItem(row, 1, QTableWidgetItem(item["problem"]))
-            self.table.setItem(row, 2, QTableWidgetItem(item["object"]))
-            self.table.setItem(row, 3, QTableWidgetItem(item["description"]))
-            self.table.setItem(row, 4, QTableWidgetItem(item["recommendation"]))
+            self.table.setItem(row, 1, QTableWidgetItem(level_name(item["level"])))
+            self.table.setItem(row, 2, QTableWidgetItem(item["problem"]))
+            self.table.setItem(row, 3, QTableWidgetItem(item["object"]))
+            self.table.setItem(row, 4, QTableWidgetItem(item["description"]))
+            self.table.setItem(row, 5, QTableWidgetItem(item["recommendation"]))
 
             # Цвета строк
             color = {
+                "critical": QColor("#ffcccc"),
                 "high": QColor("#ffcccc"),
                 "medium": QColor("#ffff99"),
-                "low": QColor("#ccffcc")
+                "low": QColor("#ccffcc"),
+                "info": QColor("#666666")
             }.get(item["level"], QColor("#666666"))
 
-            for col in range(5):
+            for col in range(1, 6):  # Пропускаем индикатор в col 0
                 self.table.item(row, col).setBackground(color)
 
         self.table.resizeColumnsToContents()
