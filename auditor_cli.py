@@ -1,6 +1,6 @@
 import argparse
 import sys
-from auditor_core import check_ports, check_permissions, check_cron, make_report, save_report
+from auditor_core import check_ports, check_permissions, check_cron, check_cve_services, make_report, save_report
 
 
 def parse_args():
@@ -16,6 +16,11 @@ def parse_args():
         default="audit_report.txt",
         help="файл для сохранения отчёта (по умолчанию audit_report.txt)",
     )
+    parser.add_argument(
+        "--cve",
+        action="store_true",
+        help="Включить проверку CVE по открытым сервисам",
+    )
     return parser.parse_args()
 
 
@@ -26,7 +31,11 @@ def main_cli():
     perm_items = check_permissions()
     cron_items = check_cron()
 
-    report = make_report(network_items, perm_items, cron_items)
+    cve_items = []
+    if args.cve:
+        cve_items = check_cve_services(network_items)
+
+    report = make_report(network_items, perm_items, cron_items, cve_items)
     print(report, end="")
     save_report(report, args.output)
     print("Отчёт сохранён в файл:", args.output)

@@ -9,23 +9,25 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
 from PyQt5.QtGui import QFont, QPalette, QColor, QIcon, QPixmap
-from auditor_core import check_ports, check_permissions, check_cron, make_report, save_report, level_name
+from auditor_core import check_ports, check_permissions, check_cron, check_cve_services, make_report, save_report, level_name
 
 
 class AuditWorker(QThread):
-    finished = pyqtSignal(list, list, list)
+    finished = pyqtSignal(list, list, list, list)
     progress = pyqtSignal(str)
 
-    def __init__(self, check_ports_flag, check_perm_flag, check_cron_flag):
+    def __init__(self, check_ports_flag, check_perm_flag, check_cron_flag, check_cve_flag):
         super().__init__()
         self.check_ports_flag = check_ports_flag
         self.check_perm_flag = check_perm_flag
         self.check_cron_flag = check_cron_flag
+        self.check_cve_flag = check_cve_flag
 
     def run(self):
         network_items = []
         perm_items = []
         cron_items = []
+        cve_items = []
 
         if self.check_ports_flag:
             self.progress.emit("Проверяем открытые порты...")
@@ -39,8 +41,12 @@ class AuditWorker(QThread):
             self.progress.emit("Проверяем cron-задачи...")
             cron_items = check_cron()
 
+        if self.check_cve_flag and network_items:
+            self.progress.emit("Проверяем потенциальные CVE по открытым сервисам...")
+            cve_items = check_cve_services(network_items)
+
         self.progress.emit("Готово")
-        self.finished.emit(network_items, perm_items, cron_items)
+        self.finished.emit(network_items, perm_items, cron_items, cve_items)
 
 
 class AuditorUI(QMainWindow):
@@ -182,6 +188,10 @@ class AuditorUI(QMainWindow):
         self.chk_cron.setChecked(True)
         settings_layout.addWidget(self.chk_cron)
 
+        self.chk_cve = QCheckBox("Проверять CVE по открытым сервисам")
+        self.chk_cve.setChecked(True)
+        settings_layout.addWidget(self.chk_cve)
+
         self.settings_group.setVisible(True)
         layout.addWidget(self.settings_group)
 
@@ -270,7 +280,8 @@ class AuditorUI(QMainWindow):
         self.worker = AuditWorker(
             self.chk_ports.isChecked(),
             self.chk_perm.isChecked(),
-            self.chk_cron.isChecked()
+            self.chk_cron.isChecked(),
+            self.chk_cve.isChecked()
         )
         self.worker.progress.connect(self.update_progress)
         self.worker.finished.connect(self.on_audit_finished)
@@ -279,10 +290,11 @@ class AuditorUI(QMainWindow):
     def update_progress(self, message):
         self.status_bar.showMessage(message)
 
-    def on_audit_finished(self, network_items, perm_items, cron_items):
+    def on_audit_finished(self, network_items, perm_items, cron_items, cve_items):
         self.network_items = network_items
         self.perm_items = perm_items
         self.cron_items = cron_items
+        self.cve_items = cve_items
 
         self.all_items = []
         for i in network_items:
@@ -293,6 +305,9 @@ class AuditorUI(QMainWindow):
             self.all_items.append(i)
         for i in cron_items:
             i["source"] = "cron"
+            self.all_items.append(i)
+        for i in cve_items:
+            i["source"] = "cve"
             self.all_items.append(i)
 
         self.update_table()

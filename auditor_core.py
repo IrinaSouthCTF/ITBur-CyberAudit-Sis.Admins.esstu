@@ -73,6 +73,37 @@ PORT_INFO = {
     27017: ("MongoDB", "high", "MongoDB, открытая по сети, требует обязательной аутентификацию.", "sudo iptables -A INPUT -p tcp --dport 27017 -j DROP"),
 }
 
+# Статическая база CVE-правил по известным сервисам/портам
+CVE_SERVICE_DB = {
+    22: [
+        {
+            "id": "CVE-2024-XXXX",
+            "service": "OpenSSH",
+            "level": "high",
+            "description": "Обнаружен открытый SSH-порт. Возможно, используется уязвимая версия OpenSSH без обновлений.",
+            "recommendation": "Обновите OpenSSH до последней стабильной версии и проверьте конфигурацию /etc/ssh/sshd_config.",
+        }
+    ],
+    3306: [
+        {
+            "id": "CVE-2023-XXXX",
+            "service": "MySQL/MariaDB",
+            "level": "high",
+            "description": "Обнаружен открытый MySQL-порт. Это повышает риск атак, если сервер не обновлён.",
+            "recommendation": "Обновите MySQL/MariaDB и ограничьте доступ по сети (локалхост/брандмауэр).",
+        }
+    ],
+    6379: [
+        {
+            "id": "CVE-2022-XXXX",
+            "service": "Redis",
+            "level": "high",
+            "description": "Обнаружен открытый Redis-порт. Redis без аутентификации может привести к удалённому выполнению команд.",
+            "recommendation": "Закройте доступ Redis из внешней сети, настройте авторизацию и используйте брандмауэр.",
+        }
+    ],
+}
+
 CRON_PATTERNS = [
     (r"/tmp/", "В cron используется путь из /tmp.", "Перенесите скрипт в постоянный каталог и проверьте права доступа."),
     (r"/var/tmp/", "В cron используется путь из /var/tmp.", "Проверьте, кто может изменять этот файл."),
@@ -318,6 +349,41 @@ def check_ports():
     return unique_items(items)
 
 
+def _extract_port_from_object(obj):
+    # ожидаем формат "порт <число>" (русский) или "port <число>"
+    m = re.search(r"(?:порт|port)\s+(\d+)", str(obj), re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def check_cve_services(network_items):
+    items = []
+    for net in network_items:
+        port = _extract_port_from_object(net.get("object", ""))
+        if not port or port not in CVE_SERVICE_DB:
+            continue
+
+        for cve in CVE_SERVICE_DB[port]:
+            # обнаружение производится по открытому порту, не по версии, поэтому уровень может быть уточнён
+            add_item(
+                items,
+                "cve",
+                cve.get("level", "medium"),
+                net.get("object", f"порт {port}"),
+                f"Потенциальная уязвимость {cve.get('id')} ({cve.get('service')})",
+                cve.get("description", "Обнаружен сервис, подверженный известной CVE."),
+                cve.get("recommendation", "Проверьте обновления и конфигурацию сервиса."),
+                {
+                    "CVE": cve.get("id"),
+                    "Сервис": cve.get("service"),
+                    "Основание": f"Открыт порт {port}",
+                    "Состояние": net.get("details", {}).get("Привязка", "неизвестно"),
+                },
+            )
+    return unique_items(items)
+
+
 def get_cron_files():
     files = []
     for location in CRON_LOCATIONS:
@@ -422,12 +488,15 @@ def make_section(title, items):
     return "\n".join(lines)
 
 
-def make_summary(network_items, perm_items, cron_items):
+def make_summary(network_items, perm_items, cron_items, cve_items=None):
+    if cve_items is None:
+        cve_items = []
+
     high = 0
     medium = 0
     low = 0
 
-    for item in network_items + perm_items + cron_items:
+    for item in network_items + perm_items + cron_items + cve_items:
         if item["level"] == "high":
             high += 1
         elif item["level"] == "medium":
@@ -445,17 +514,21 @@ def make_summary(network_items, perm_items, cron_items):
         f"Найдено сетевых замечаний: {len(network_items)}",
         f"Найдено проблем с правами: {len(perm_items)}",
         f"Найдено замечаний по cron: {len(cron_items)}",
+        f"Найдено CVE-замечаний: {len(cve_items)}",
     ]
     return "\n".join(lines)
 
 
-def make_report(network_items, perm_items, cron_items):
+def make_report(network_items, perm_items, cron_items, cve_items=None):
+    if cve_items is None:
+        cve_items = []
     parts = [
         "ОТЧЁТ БАЗОВОГО АУДИТА LINUX-СИСТЕМЫ",
         make_section("ПРОВЕРКА ОТКРЫТЫХ ПОРТОВ И СЕТЕВЫХ СЕРВИСОВ", network_items),
         make_section("ПРОВЕРКА ПРАВ ДОСТУПА К ФАЙЛАМ И КАТАЛОГАМ", perm_items),
         make_section("ПРОВЕРКА CRON-ЗАДАЧ", cron_items),
-        make_summary(network_items, perm_items, cron_items),
+        make_section("ПРОВЕРКА CVE-СЕРВИСОВ (по открытым портам)", cve_items),
+        make_summary(network_items, perm_items, cron_items, cve_items),
     ]
     return "\n\n".join(parts) + "\n"
 
