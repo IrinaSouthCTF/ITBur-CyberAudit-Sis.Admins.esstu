@@ -179,6 +179,12 @@ class AuditorUI(QMainWindow):
         self.btn_audit.clicked.connect(self.run_audit)
         audit_layout.addWidget(self.btn_audit)
 
+        self.btn_recheck = QPushButton("Перепроверить")
+        self.btn_recheck.setMinimumHeight(35)
+        self.btn_recheck.clicked.connect(self.run_audit)
+        self.btn_recheck.setEnabled(False)
+        audit_layout.addWidget(self.btn_recheck)
+
         self.btn_save = QPushButton("Сохранить отчёт")
         self.btn_save.setMinimumHeight(35)
         self.btn_save.clicked.connect(self.save_report_dialog)
@@ -241,6 +247,7 @@ class AuditorUI(QMainWindow):
 
     def run_audit(self):
         self.btn_audit.setEnabled(False)
+        self.btn_recheck.setEnabled(False)
         self.btn_audit.setText("Выполняется...")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Неопределённый прогресс
@@ -276,6 +283,7 @@ class AuditorUI(QMainWindow):
 
         self.update_table()
         self.btn_audit.setEnabled(True)
+        self.btn_recheck.setEnabled(True)
         self.btn_audit.setText("Запустить аудит")
         self.progress.setVisible(False)
         total_issues = len(self.all_items)

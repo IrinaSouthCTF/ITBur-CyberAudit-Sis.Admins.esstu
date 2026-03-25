@@ -55,11 +55,11 @@ SUSPICIOUS_NAMES = [
 ]
 
 PORT_INFO = {
-    21: ("FTP", "high", "FTP передаёт данные без шифрования.", "sudo systemctl stop vsftpd && sudo systemctl disable vsftpd"),
-    23: ("Telnet", "high", "Telnet передаёт логины и команды в открытом виде.", "sudo systemctl stop telnet && sudo systemctl disable telnet"),
-    69: ("TFTP", "high", "TFTP не использует аутентификацию и шифрование.", "sudo systemctl stop tftpd-hpa && sudo systemctl disable tftpd-hpa"),
+    21: ("FTP", "high", "FTP передаёт данные без шифрования.", "sudo iptables -A INPUT -p tcp --dport 21 -j DROP"),
+    23: ("Telnet", "high", "Telnet передаёт логины и команды в открытом виде.", "sudo iptables -A INPUT -p tcp --dport 23 -j DROP"),
+    69: ("TFTP", "high", "TFTP не использует аутентификацию и шифрование.", "sudo iptables -A INPUT -p tcp --dport 69 -j DROP"),
     80: ("HTTP", "medium", "Веб-служба доступна по сети и требует отдельной проверки.", "sudo iptables -A INPUT -p tcp --dport 80 -j DROP"),
-    111: ("rpcbind", "medium", "rpcbind увеличивает поверхность атаки и часто нужен только вместе с другими службами.", "sudo systemctl stop rpcbind && sudo systemctl disable rpcbind"),
+    111: ("rpcbind", "medium", "rpcbind увеличивает поверхность атаки и часто нужен только вместе с другими службами.", "sudo iptables -A INPUT -p tcp --dport 111 -j DROP"),
     139: ("NetBIOS", "high", "Сетевой доступ к NetBIOS лучше ограничивать внутренней сетью.", "sudo iptables -A INPUT -p tcp --dport 139 -j DROP"),
     445: ("SMB", "high", "Открытый SMB требует жёсткого контроля доступа.", "sudo iptables -A INPUT -p tcp --dport 445 -j DROP"),
     3306: ("MySQL/MariaDB", "high", "СУБД доступна по сети.", "sudo iptables -A INPUT -p tcp --dport 3306 -j DROP"),
