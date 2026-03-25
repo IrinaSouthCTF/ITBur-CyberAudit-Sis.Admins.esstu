@@ -173,12 +173,12 @@ class AuditorUI(QMainWindow):
         self.chk_cron.setChecked(True)
         audit_layout.addWidget(self.chk_cron)
 
-        self.btn_audit = QPushButton("🚀 Запустить аудит")
+        self.btn_audit = QPushButton("Запустить аудит")
         self.btn_audit.setMinimumHeight(35)
         self.btn_audit.clicked.connect(self.run_audit)
         audit_layout.addWidget(self.btn_audit)
 
-        self.btn_save = QPushButton("💾 Сохранить отчёт")
+        self.btn_save = QPushButton("Сохранить отчёт")
         self.btn_save.setMinimumHeight(35)
         self.btn_save.clicked.connect(self.save_report_dialog)
         audit_layout.addWidget(self.btn_save)
@@ -201,7 +201,7 @@ class AuditorUI(QMainWindow):
         self.txt_search.textChanged.connect(self.update_table)
         filter_layout.addWidget(self.txt_search)
 
-        self.btn_open = QPushButton("📁 Открыть путь")
+        self.btn_open = QPushButton("Открыть путь")
         self.btn_open.clicked.connect(self.open_selected_path)
         filter_layout.addWidget(self.btn_open)
 
@@ -229,14 +229,14 @@ class AuditorUI(QMainWindow):
         layout.addWidget(self.progress)
 
         self.status_bar = self.statusBar()
-        self.status_bar.showMessage("🔍 Готов к аудиту системы безопасности")
+        self.status_bar.showMessage("Готов к аудиту системы безопасности")
 
     def run_audit(self):
         self.btn_audit.setEnabled(False)
-        self.btn_audit.setText("⏳ Выполняется...")
+        self.btn_audit.setText("Выполняется...")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Неопределённый прогресс
-        self.status_bar.showMessage("🔄 Запуск комплексного аудита...")
+        self.status_bar.showMessage("Запуск комплексного аудита...")
 
         self.worker = AuditWorker(
             self.chk_ports.isChecked(),
@@ -290,7 +290,7 @@ class AuditorUI(QMainWindow):
         for row, item in enumerate(self.filtered_items):
             # Флажок
             indicator = QLabel()
-            indicator.setFixedSize(20, 20)
+            indicator.setFixedSize(4, 20)
             if item["level"] == "critical":
                 indicator.setStyleSheet("background-color: #ff4444; border: 1px solid #333;")
             elif item["level"] == "high":
@@ -308,18 +308,6 @@ class AuditorUI(QMainWindow):
             self.table.setItem(row, 2, QTableWidgetItem(item["object"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["description"]))
             self.table.setItem(row, 4, QTableWidgetItem(item["recommendation"]))
-
-            # Цвета строк
-            color = {
-                "critical": QColor("#ffcccc"),
-                "high": QColor("#ffcccc"),
-                "medium": QColor("#ffff99"),
-                "low": QColor("#ccffcc"),
-                "info": QColor("#666666")
-            }.get(item["level"], QColor("#666666"))
-
-            for col in range(5):
-                self.table.item(row, col).setBackground(color)
 
         self.table.resizeColumnsToContents()
         self.table.resizeRowsToContents()
