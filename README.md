@@ -70,6 +70,16 @@ python auditor.py --nogui -o audit_result.txt
 python auditor.py --nogui --cve -o audit_result.txt
 ```
 
+#### Принудительное обновление (с загрузкой из сети):
+```bash
+python auditor.py --nogui --cve --cve-update -o audit_result.txt
+```
+
+#### Использовать локальную базу без обращения к сети:
+```bash
+python auditor.py --nogui --cve --no-cve-online -o audit_result.txt
+```
+
 #### Графический интерфейс (если установлен PyQt5 и есть дисплей):
 ```bash
 python auditor.py

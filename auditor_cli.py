@@ -1,6 +1,6 @@
 import argparse
 import sys
-from auditor_core import check_ports, check_permissions, check_cron, check_cve_services, make_report, save_report
+from auditor_core import check_ports, check_permissions, check_cron, check_cve_services, get_cve_db, make_report, save_report
 
 
 def parse_args():
@@ -21,6 +21,22 @@ def parse_args():
         action="store_true",
         help="Включить проверку CVE по открытым сервисам",
     )
+    parser.add_argument(
+        "--cve-update",
+        action="store_true",
+        help="Принудительно обновить базу CVE до текущей версии",
+    )
+    parser.add_argument(
+        "--cve-cache-days",
+        type=int,
+        default=7,
+        help="Сколько дней считать базу CVE актуальной (по умолчанию 7)",
+    )
+    parser.add_argument(
+        "--no-cve-online",
+        action="store_true",
+        help="Не запрашивать CVE-данные из сети, использовать только локальную базу/встроенный список",
+    )
     return parser.parse_args()
 
 
@@ -33,7 +49,12 @@ def main_cli():
 
     cve_items = []
     if args.cve:
-        cve_items = check_cve_services(network_items)
+        cve_db = get_cve_db(
+            force_update=args.cve_update,
+            ttl_days=args.cve_cache_days,
+            allow_online=not args.no_cve_online,
+        )
+        cve_items = check_cve_services(network_items, cve_db=cve_db)
 
     report = make_report(network_items, perm_items, cron_items, cve_items)
     print(report, end="")

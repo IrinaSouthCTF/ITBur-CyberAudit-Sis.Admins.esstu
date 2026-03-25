@@ -1,9 +1,14 @@
 import argparse
+import datetime
+import json
 import os
 import re
+import socket
 import stat
 import subprocess
 import sys
+import urllib.request
+import urllib.error
 from pathlib import Path
 
 CHECK_DIRS = [
@@ -103,6 +108,116 @@ CVE_SERVICE_DB = {
         }
     ],
 }
+
+CVE_DB_FILENAME = "cve_db.json"
+CVE_DB_URL = "https://example.com/cve_db.json"
+CVE_DB_TTL_DAYS = 7
+
+
+def get_cve_db_path():
+    return Path(os.path.abspath(os.path.dirname(__file__))) / CVE_DB_FILENAME
+
+
+def load_local_cve_db():
+    path = get_cve_db_path()
+    if not path.exists():
+        return None
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def save_local_cve_db(cve_db):
+    path = get_cve_db_path()
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(cve_db, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
+def is_cve_db_stale(cve_meta, ttl_days=CVE_DB_TTL_DAYS):
+    if not isinstance(cve_meta, dict):
+        return True
+
+    timestamp = cve_meta.get("updated_at")
+    if not timestamp:
+        return True
+
+    try:
+        updated_at = datetime.datetime.fromisoformat(timestamp)
+    except ValueError:
+        return True
+
+    delta = datetime.datetime.now(datetime.timezone.utc) - updated_at
+    return delta.days >= ttl_days
+
+
+def download_cve_db(url=CVE_DB_URL, timeout=15):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "LinuxAuditor/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                return None
+            data = resp.read()
+            cve_db = json.loads(data.decode("utf-8"))
+            return cve_db
+    except (urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError, socket.timeout, ValueError):
+        return None
+
+
+def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True):
+    local = load_local_cve_db()
+    if force_update and allow_online:
+        remote = download_cve_db()
+        if remote:
+            remote.setdefault("meta", {})
+            remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            save_local_cve_db(remote)
+            return remote
+
+    if local:
+        meta = local.get("meta", {})
+        stale = is_cve_db_stale(meta, ttl_days)
+        if stale and allow_online:
+            remote = download_cve_db()
+            if remote:
+                remote.setdefault("meta", {})
+                remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+                save_local_cve_db(remote)
+                return remote
+        return local
+
+    if allow_online:
+        remote = download_cve_db()
+        if remote:
+            remote.setdefault("meta", {})
+            remote["meta"].update({"updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            save_local_cve_db(remote)
+            return remote
+
+    return {"data": CVE_SERVICE_DB, "meta": {"source": "builtin", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
+
+
+def normalize_cve_db(cve_db):
+    if not cve_db:
+        return CVE_SERVICE_DB
+    if isinstance(cve_db, dict) and "data" in cve_db and isinstance(cve_db["data"], dict):
+        normalized = {}
+        for k, v in cve_db["data"].items():
+            try:
+                normalized[int(k)] = v
+            except (ValueError, TypeError):
+                continue
+        return normalized
+    if isinstance(cve_db, dict):
+        # Возможно старый формат
+        return cve_db
+    return CVE_SERVICE_DB
 
 CRON_PATTERNS = [
     (r"/tmp/", "В cron используется путь из /tmp.", "Перенесите скрипт в постоянный каталог и проверьте права доступа."),
@@ -357,15 +472,16 @@ def _extract_port_from_object(obj):
     return None
 
 
-def check_cve_services(network_items):
+def check_cve_services(network_items, cve_db=None):
+    cve_rules = normalize_cve_db(cve_db or get_cve_db())
     items = []
+
     for net in network_items:
         port = _extract_port_from_object(net.get("object", ""))
-        if not port or port not in CVE_SERVICE_DB:
+        if not port or port not in cve_rules:
             continue
 
-        for cve in CVE_SERVICE_DB[port]:
-            # обнаружение производится по открытому порту, не по версии, поэтому уровень может быть уточнён
+        for cve in cve_rules.get(port, []):
             add_item(
                 items,
                 "cve",
@@ -381,6 +497,7 @@ def check_cve_services(network_items):
                     "Состояние": net.get("details", {}).get("Привязка", "неизвестно"),
                 },
             )
+
     return unique_items(items)
 
 
