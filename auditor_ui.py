@@ -158,32 +158,42 @@ class AuditorUI(QMainWindow):
         layout.setSpacing(10)
         layout.setContentsMargins(15, 15, 15, 15)
 
-        # Группа настроек аудита
-        audit_group = QGroupBox("Настройки аудита")
-        audit_layout = QHBoxLayout(audit_group)
+        # Кнопка для раскрытия настроек
+        self.btn_settings_toggle = QPushButton("▼ Настройки проверки")
+        self.btn_settings_toggle.setMinimumHeight(30)
+        self.btn_settings_toggle.clicked.connect(self.toggle_settings)
+        layout.addWidget(self.btn_settings_toggle)
+
+        # Группа настроек (раскрывается/складывается)
+        self.settings_group = QGroupBox()
+        self.settings_group.setFlat(True)
+        settings_layout = QVBoxLayout(self.settings_group)
+        settings_layout.setContentsMargins(20, 5, 5, 5)
 
         self.chk_ports = QCheckBox("Проверять открытые порты")
         self.chk_ports.setChecked(True)
-        audit_layout.addWidget(self.chk_ports)
+        settings_layout.addWidget(self.chk_ports)
 
         self.chk_perm = QCheckBox("Проверять права файлов/каталогов")
         self.chk_perm.setChecked(True)
-        audit_layout.addWidget(self.chk_perm)
+        settings_layout.addWidget(self.chk_perm)
 
         self.chk_cron = QCheckBox("Проверять cron-задачи")
         self.chk_cron.setChecked(True)
-        audit_layout.addWidget(self.chk_cron)
+        settings_layout.addWidget(self.chk_cron)
+
+        self.settings_group.setVisible(True)
+        layout.addWidget(self.settings_group)
+
+        # Группа кнопок аудита
+        audit_group = QGroupBox()
+        audit_group.setFlat(True)
+        audit_layout = QHBoxLayout(audit_group)
 
         self.btn_audit = QPushButton("Запустить аудит")
         self.btn_audit.setMinimumHeight(35)
         self.btn_audit.clicked.connect(self.run_audit)
         audit_layout.addWidget(self.btn_audit)
-
-        self.btn_recheck = QPushButton("Перепроверить")
-        self.btn_recheck.setMinimumHeight(35)
-        self.btn_recheck.clicked.connect(self.run_audit)
-        self.btn_recheck.setEnabled(False)
-        audit_layout.addWidget(self.btn_recheck)
 
         self.btn_save = QPushButton("Сохранить отчёт")
         self.btn_save.setMinimumHeight(35)
@@ -245,9 +255,13 @@ class AuditorUI(QMainWindow):
         self.status_bar = self.statusBar()
         self.status_bar.showMessage("Готов к аудиту системы безопасности")
 
+    def toggle_settings(self):
+        is_visible = self.settings_group.isVisible()
+        self.settings_group.setVisible(not is_visible)
+        self.btn_settings_toggle.setText("▶ Настройки проверки" if is_visible else "▼ Настройки проверки")
+
     def run_audit(self):
         self.btn_audit.setEnabled(False)
-        self.btn_recheck.setEnabled(False)
         self.btn_audit.setText("Выполняется...")
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # Неопределённый прогресс
@@ -283,7 +297,6 @@ class AuditorUI(QMainWindow):
 
         self.update_table()
         self.btn_audit.setEnabled(True)
-        self.btn_recheck.setEnabled(True)
         self.btn_audit.setText("Запустить аудит")
         self.progress.setVisible(False)
         total_issues = len(self.all_items)
