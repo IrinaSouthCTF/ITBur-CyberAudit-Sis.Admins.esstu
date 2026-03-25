@@ -46,6 +46,7 @@ class AuditWorker(QThread):
 class AuditorUI(QMainWindow):
     def __init__(self):
         super().__init__()
+        self.level_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
         self.setWindowTitle("Linux Auditor - Система аудита безопасности")
         self.setGeometry(100, 100, 1500, 900)
         self.setWindowIcon(QIcon())  # Можно добавить иконку позже
@@ -220,6 +221,7 @@ class AuditorUI(QMainWindow):
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
         self.table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
+        self.table.setSortingEnabled(True)
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -308,7 +310,9 @@ class AuditorUI(QMainWindow):
                 indicator.setStyleSheet("background-color: #888888; border: 1px solid #333; border-radius: 2px;")
             self.table.setCellWidget(row, 5, indicator)
 
-            self.table.setItem(row, 0, QTableWidgetItem(level_name(item["level"])))
+            level_item = QTableWidgetItem(level_name(item["level"]))
+            level_item.setData(Qt.UserRole, self.level_order.get(item["level"], 5))
+            self.table.setItem(row, 0, level_item)
             self.table.setItem(row, 1, QTableWidgetItem(item["problem"]))
             self.table.setItem(row, 2, QTableWidgetItem(item["object"]))
             self.table.setItem(row, 3, QTableWidgetItem(item["description"]))
