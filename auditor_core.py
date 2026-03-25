@@ -58,19 +58,19 @@ PORT_INFO = {
     21: ("FTP", "high", "FTP передаёт данные без шифрования.", "sudo systemctl stop vsftpd && sudo systemctl disable vsftpd"),
     23: ("Telnet", "high", "Telnet передаёт логины и команды в открытом виде.", "sudo systemctl stop telnet && sudo systemctl disable telnet"),
     69: ("TFTP", "high", "TFTP не использует аутентификацию и шифрование.", "sudo systemctl stop tftpd-hpa && sudo systemctl disable tftpd-hpa"),
-    80: ("HTTP", "medium", "Веб-служба доступна по сети и требует отдельной проверки.", "sudo ufw deny 80/tcp"),
+    80: ("HTTP", "medium", "Веб-служба доступна по сети и требует отдельной проверки.", "sudo iptables -A INPUT -p tcp --dport 80 -j DROP"),
     111: ("rpcbind", "medium", "rpcbind увеличивает поверхность атаки и часто нужен только вместе с другими службами.", "sudo systemctl stop rpcbind && sudo systemctl disable rpcbind"),
-    139: ("NetBIOS", "high", "Сетевой доступ к NetBIOS лучше ограничивать внутренней сетью.", "sudo ufw deny 139/tcp"),
-    445: ("SMB", "high", "Открытый SMB требует жёсткого контроля доступа.", "sudo ufw deny 445/tcp"),
-    3306: ("MySQL/MariaDB", "high", "СУБД доступна по сети.", "sudo ufw deny 3306/tcp"),
-    5432: ("PostgreSQL", "high", "СУБД доступна по сети.", "sudo ufw deny 5432/tcp"),
-    5900: ("VNC", "high", "VNC часто оставляют без достаточной защиты.", "sudo ufw deny 5900/tcp"),
-    6379: ("Redis", "high", "Redis не должен быть открыт во внешнюю сеть без защиты.", "sudo ufw deny 6379/tcp"),
-    8080: ("HTTP-alt", "medium", "На этом порту часто работают тестовые сервисы и панели.", "sudo ufw deny 8080/tcp"),
-    8443: ("HTTPS-alt", "medium", "На нестандартном HTTPS-порту нередко работают служебные интерфейсы.", "sudo ufw deny 8443/tcp"),
-    9200: ("Elasticsearch", "high", "Elasticsearch без защиты может раскрывать данные.", "sudo ufw deny 9200/tcp"),
-    11211: ("Memcached", "high", "Memcached не должен быть доступен извне.", "sudo ufw deny 11211/tcp"),
-    27017: ("MongoDB", "high", "MongoDB, открытая по сети, требует обязательной аутентификацию.", "sudo ufw deny 27017/tcp"),
+    139: ("NetBIOS", "high", "Сетевой доступ к NetBIOS лучше ограничивать внутренней сетью.", "sudo iptables -A INPUT -p tcp --dport 139 -j DROP"),
+    445: ("SMB", "high", "Открытый SMB требует жёсткого контроля доступа.", "sudo iptables -A INPUT -p tcp --dport 445 -j DROP"),
+    3306: ("MySQL/MariaDB", "high", "СУБД доступна по сети.", "sudo iptables -A INPUT -p tcp --dport 3306 -j DROP"),
+    5432: ("PostgreSQL", "high", "СУБД доступна по сети.", "sudo iptables -A INPUT -p tcp --dport 5432 -j DROP"),
+    5900: ("VNC", "high", "VNC часто оставляют без достаточной защиты.", "sudo iptables -A INPUT -p tcp --dport 5900 -j DROP"),
+    6379: ("Redis", "high", "Redis не должен быть открыт во внешнюю сеть без защиты.", "sudo iptables -A INPUT -p tcp --dport 6379 -j DROP"),
+    8080: ("HTTP-alt", "medium", "На этом порту часто работают тестовые сервисы и панели.", "sudo iptables -A INPUT -p tcp --dport 8080 -j DROP"),
+    8443: ("HTTPS-alt", "medium", "На нестандартном HTTPS-порту нередко работают служебные интерфейсы.", "sudo iptables -A INPUT -p tcp --dport 8443 -j DROP"),
+    9200: ("Elasticsearch", "high", "Elasticsearch без защиты может раскрывать данные.", "sudo iptables -A INPUT -p tcp --dport 9200 -j DROP"),
+    11211: ("Memcached", "high", "Memcached не должен быть доступен извне.", "sudo iptables -A INPUT -p tcp --dport 11211 -j DROP"),
+    27017: ("MongoDB", "high", "MongoDB, открытая по сети, требует обязательной аутентификацию.", "sudo iptables -A INPUT -p tcp --dport 27017 -j DROP"),
 }
 
 CRON_PATTERNS = [
@@ -194,7 +194,7 @@ def check_permissions():
                     path,
                     "Каталог открыт на запись для всех",
                     "Каталог может изменять любой пользователь системы.",
-                    f"chmod 755 '{path}'",
+                    f"sudo chmod 755 '{path}'",
                     {"Права": mode_text},
                 )
             continue
@@ -207,7 +207,7 @@ def check_permissions():
                 path,
                 "Файл с правами 777",
                 "Файл доступен всем на чтение, запись и выполнение.",
-                f"chmod 644 '{path}'",
+                f"sudo chmod 644 '{path}'",
                 {"Права": mode_text},
             )
         elif mode == 0o666:
@@ -218,7 +218,7 @@ def check_permissions():
                 path,
                 "Файл с правами 666",
                 "Файл доступен всем на чтение и запись.",
-                f"chmod 644 '{path}'",
+                f"sudo chmod 644 '{path}'",
                 {"Права": mode_text},
             )
         elif mode & 0o002:
@@ -229,7 +229,7 @@ def check_permissions():
                 path,
                 "Файл открыт на запись для всех",
                 "Обычный файл имеет признак world-writable.",
-                f"chmod o-w '{path}'",
+                f"sudo chmod o-w '{path}'",
                 {"Права": mode_text},
             )
 
@@ -241,7 +241,7 @@ def check_permissions():
                 path,
                 "Подозрительный файл доступен на чтение всем",
                 "Имя файла похоже на конфигурационный, ключевой или резервный.",
-                f"chmod 600 '{path}'",
+                f"sudo chmod 600 '{path}'",
                 {"Права": mode_text},
             )
 
@@ -358,7 +358,7 @@ def check_cron():
                     str(cron_file),
                     "Cron-файл открыт на запись для всех",
                     "Файл планировщика может быть изменён любым пользователем.",
-                    f"chmod 600 '{cron_file}'",
+                    f"sudo chmod 600 '{cron_file}'",
                     {"Права": oct(mode)},
                 )
         except OSError:
@@ -377,7 +377,7 @@ def check_cron():
                     str(cron_file),
                     "Подозрительное содержимое cron-задачи",
                     description,
-                    f"nano '{cron_file}'",
+                    f"sudo nano '{cron_file}'",
                     {"Совпадение": pattern},
                 )
 
