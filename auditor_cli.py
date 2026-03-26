@@ -33,6 +33,12 @@ def parse_args():
         help="Сколько дней считать базу CVE актуальной (по умолчанию 7)",
     )
     parser.add_argument(
+        "--cve-source",
+        choices=["nvd", "cvelistv5", "local", "builtin", "all"],
+        default="all",
+        help="Источник CVE: nvd, cvelistv5, local (клонированный cvelistV5), builtin (статический), all (попытка всех)",
+    )
+    parser.add_argument(
         "--no-cve-online",
         action="store_true",
         help="Не запрашивать CVE-данные из сети, использовать только локальную базу/встроенный список",
@@ -53,6 +59,7 @@ def main_cli():
             force_update=args.cve_update,
             ttl_days=args.cve_cache_days,
             allow_online=not args.no_cve_online,
+            cve_source=args.cve_source,
         )
         cve_items = check_cve_services(network_items, cve_db=cve_db)
 

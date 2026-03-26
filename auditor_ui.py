@@ -1,4 +1,5 @@
 import os
+import shutil
 import subprocess
 import sys
 from PyQt5.QtWidgets import (
@@ -377,10 +378,21 @@ class AuditorUI(QMainWindow):
         dir_path = os.path.dirname(obj_path) if os.path.isfile(obj_path) else obj_path
 
         try:
-            subprocess.Popen(["xdg-open", dir_path])
+            if sys.platform.startswith("win"):
+                os.startfile(dir_path)
+            elif sys.platform.startswith("darwin"):
+                subprocess.Popen(["open", dir_path])
+            else:
+                if not shutil.which("xdg-open"):
+                    raise FileNotFoundError("xdg-open не найден")
+                subprocess.Popen(["xdg-open", dir_path])
             QMessageBox.information(self, "Успех", f"Открыта директория: {dir_path}")
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось открыть директорию: {e}")
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Не удалось открыть директорию: {e}. Путь: {dir_path}",
+            )
 
     def on_cell_clicked(self, row, col):
         if col == 4:  # Команда

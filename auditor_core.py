@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import json
+import logging
 import os
 import re
 import socket
@@ -11,6 +12,12 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] %(levelname)s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+)
 
 CHECK_DIRS = [
     "/etc",
@@ -113,6 +120,12 @@ CVE_SERVICE_DB = {
 CVE_DB_FILENAME = "cve_db.json"
 # Публичный NVD API
 NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/1.0"
+# Основной репозиторий cveproject (GitHub raw)
+CVELIST_V5_BASE = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
+# Вариант через proxy для РФ
+CVELIST_V5_PROXY = "https://ghproxy.com/https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
+# Файловый путь локального клона cvelistV5
+CVELIST_LOCAL_PATH = os.environ.get("CVELOCAL_PATH", "/opt/cvelistV5/cves")
 # Носитель ключа: переменная окружения NVD_API_KEY (необязательна, но рекомендуется)
 
 CVE_DB_TTL_DAYS = 7
@@ -127,6 +140,19 @@ CPE_MAP = {
     6379: "cpe:2.3:a:redis:redis",
     9200: "cpe:2.3:a:elastic:elasticsearch",
     27017: "cpe:2.3:a:mongodb:mongodb",
+}
+
+SERVICE_KEYWORDS = {
+    22: ["openssh", "ssh"],
+    21: ["ftp"],
+    23: ["telnet"],
+    80: ["http", "apache"],
+    3306: ["mysql", "mariadb"],
+    5432: ["postgresql"],
+    5900: ["vnc"],
+    6379: ["redis"],
+    9200: ["elasticsearch"],
+    27017: ["mongodb"],
 }
 
 
@@ -156,6 +182,265 @@ def save_local_cve_db(cve_db):
         return False
 
 
+def load_json_url(url, timeout=30):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "LinuxAuditor/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                logging.warning("URL %s вернул статус %s", url, resp.status)
+                return None
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception as e:
+        logging.warning("Не удалось загрузить JSON из %s: %s", url, e)
+        return None
+
+
+def load_json_file(path):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        logging.warning("Не удалось загрузить локальный JSON %s: %s", path, e)
+        return None
+
+
+def parse_cvelist_v5_to_service_db(cvelist_json):
+    # Простое связывание по CPE из CPE_MAP или ключевым словам по сервисам
+    if not cvelist_json:
+        return {}
+
+    if isinstance(cvelist_json, dict):
+        if "CVE_Items" in cvelist_json:
+            cve_items = cvelist_json.get("CVE_Items", [])
+        elif "cves" in cvelist_json:
+            cve_items = cvelist_json.get("cves", [])
+        else:
+            # Single cve record in cvelistV5 format
+            cve_items = [cvelist_json]
+    elif isinstance(cvelist_json, list):
+        cve_items = cvelist_json
+    else:
+        return {}
+
+    if not cve_items:
+        return {}
+
+    result = {}
+    cpe_to_port = {v: k for k, v in CPE_MAP.items()}
+
+    for item in cve_items:
+        if not isinstance(item, dict):
+            continue
+
+        # ID and description support for both NVD and cvelistV5 payloads
+        cve_id = None
+        if item.get("cve", {}).get("CVE_data_meta"):
+            cve_id = item.get("cve", {}).get("CVE_data_meta", {}).get("ID")
+        elif item.get("cveMetadata"):
+            cve_id = item.get("cveMetadata", {}).get("cveId")
+
+        if not cve_id:
+            continue
+
+        desc = "Неизвестная уязвимость"
+        if item.get("cve", {}).get("description"):
+            desclist = item.get("cve", {}).get("description", {}).get("description_data", [])
+            desc = next((x.get("value") for x in desclist if x.get("value")), desc)
+        elif item.get("containers", {}).get("cna", {}).get("descriptions"):
+            desclist = item.get("containers", {}).get("cna", {}).get("descriptions", [])
+            desc = next((x.get("value") for x in desclist if x.get("value")), desc)
+
+        # CVSS score
+        score = None
+        if item.get("impact"):
+            impact = item.get("impact", {})
+            if "baseMetricV3" in impact and impact["baseMetricV3"].get("cvssV3"):
+                score = impact["baseMetricV3"]["cvssV3"].get("baseScore")
+            elif "baseMetricV2" in impact and impact["baseMetricV2"].get("cvssV2"):
+                score = impact["baseMetricV2"]["cvssV2"].get("baseScore")
+        else:
+            metrics = item.get("containers", {}).get("cna", {}).get("metrics", [])
+            for metric in metrics:
+                for key in ("cvssV4_0", "cvssV3_1", "cvssV3_0", "cvssV2_0"):
+                    cvss = metric.get(key)
+                    if cvss and cvss.get("baseScore") is not None:
+                        score = cvss.get("baseScore")
+                        break
+                if score is not None:
+                    break
+
+        level = cve_score_to_level(score)
+
+        known_ports = set()
+
+        # First try CPE matching like NVD
+        cpe_nodes = item.get("cve", {}).get("configurations", {}).get("nodes", [])
+        for node in cpe_nodes:
+            for cpe_match in node.get("cpe_match", []):
+                cpe23 = cpe_match.get("cpe23Uri")
+                if not cpe23:
+                    continue
+                for known_cpe, port in cpe_to_port.items():
+                    if cpe23.startswith(known_cpe):
+                        known_ports.add(port)
+
+        # Fallback: распознавание по имени продукта и поставщика
+        if not known_ports:
+            affected = item.get("containers", {}).get("cna", {}).get("affected", [])
+            known_parts = []
+            for record in affected:
+                if isinstance(record, dict):
+                    known_parts.append(str(record.get("vendor", "")).lower())
+                    known_parts.append(str(record.get("product", "")).lower())
+                    for ver in record.get("versions", []):
+                        if isinstance(ver, dict):
+                            known_parts.append(str(ver.get("version", "")).lower())
+
+            for port, keywords in SERVICE_KEYWORDS.items():
+                for keyword in keywords:
+                    for part in known_parts:
+                        if keyword in part:
+                            known_ports.add(port)
+                            break
+                    if port in known_ports:
+                        break
+
+        # Еще одна возможность с разделом cpe
+        if not known_ports and item.get("containers", {}).get("cna", {}).get("problemTypes"):
+            # в этих данных нет cpe, нужно прочитать заголовок или описание
+            pass
+
+        for port in known_ports:
+            service_name = CPE_MAP.get(port, "unknown")
+            entry = {
+                "id": cve_id,
+                "service": service_name,
+                "level": level,
+                "description": desc,
+                "recommendation": "Проверьте обновления и конфигурацию сервиса.",
+            }
+            result.setdefault(port, []).append(entry)
+
+    return result
+
+
+def fetch_cvelist_v5_db(timeout=30):
+    # Пытаемся получить свежие CVE из cvelistV5 через delta.json
+    candidate_paths = [
+        "delta.json",
+        "deltaLog.json",
+    ]
+
+    for base in (CVELIST_V5_BASE, CVELIST_V5_PROXY):
+        for suffix in candidate_paths:
+            url = f"{base}/{suffix}"
+            data = load_json_url(url, timeout=timeout)
+            if not data:
+                continue
+
+            if suffix.endswith("delta.json") and isinstance(data, dict):
+                # Собираем ссылки на конкретные CVE записи
+                changes = []
+                changes.extend(data.get("new", []))
+                changes.extend(data.get("updated", []))
+
+                if not changes:
+                    continue
+
+                mapped = {}
+                max_fetch = 150
+                for idx, entry in enumerate(changes):
+                    if idx >= max_fetch:
+                        break
+                    github_link = entry.get("githubLink")
+                    if not github_link:
+                        continue
+                    cve_payload = load_json_url(github_link, timeout=timeout)
+                    if not cve_payload:
+                        continue
+                    item_data = parse_cvelist_v5_to_service_db(cve_payload)
+                    for port, entries in item_data.items():
+                        mapped.setdefault(port, []).extend(entries)
+
+                if mapped:
+                    return {
+                        "data": mapped,
+                        "meta": {"source": f"cvelistv5:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                    }
+            else:
+                mapped = parse_cvelist_v5_to_service_db(data)
+                if mapped:
+                    return {
+                        "data": mapped,
+                        "meta": {"source": f"cvelistv5:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                    }
+
+    return None
+
+
+def load_cvelist_v5_local(local_path=None):
+    local_path = local_path or CVELIST_LOCAL_PATH
+    if not local_path:
+        return None
+
+    # Предпочитаем delta.json (индекс обновлённых CVE)
+    delta_path = os.path.join(local_path, "delta.json")
+    if os.path.exists(delta_path):
+        delta = load_json_file(delta_path)
+        if isinstance(delta, dict):
+            changes = []
+            changes.extend(delta.get("new", []))
+            changes.extend(delta.get("updated", []))
+
+            mapped = {}
+            max_fetch = 150
+            for idx, entry in enumerate(changes):
+                if idx >= max_fetch:
+                    break
+                github_link = entry.get("githubLink")
+                if not github_link:
+                    continue
+                suffix = github_link.replace("https://raw.githubusercontent.com/CVEProject/cvelistV5/main/", "")
+                if suffix.startswith("cves/"):
+                    suffix = suffix[len("cves/"):]
+                cve_path = os.path.join(local_path, suffix)
+                data = load_json_file(cve_path)
+                if not data:
+                    continue
+                entry_data = parse_cvelist_v5_to_service_db(data)
+                for port, entries in entry_data.items():
+                    mapped.setdefault(port, []).extend(entries)
+
+            if mapped:
+                return {
+                    "data": mapped,
+                    "meta": {"source": "cvelistv5-local", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                }
+
+    # Старая структура с JSON-скопированными файлами
+    candidate_paths = [
+        os.path.join(local_path, "nvdcve-1.1-modified.json"),
+        os.path.join(local_path, "nvdcve-1.1-recent.json"),
+        os.path.join(local_path, "nvdv5.json"),
+        os.path.join(local_path, "delta.json"),
+        os.path.join(local_path, "deltaLog.json"),
+    ]
+
+    for path in candidate_paths:
+        if not os.path.exists(path):
+            continue
+        data = load_json_file(path)
+        if data:
+            mapped = parse_cvelist_v5_to_service_db(data)
+            if mapped:
+                return {
+                    "data": mapped,
+                    "meta": {"source": "cvelistv5-local", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                }
+
+    return None
+
+
 def is_cve_db_stale(cve_meta, ttl_days=CVE_DB_TTL_DAYS):
     if not isinstance(cve_meta, dict):
         return True
@@ -166,6 +451,10 @@ def is_cve_db_stale(cve_meta, ttl_days=CVE_DB_TTL_DAYS):
 
     try:
         updated_at = datetime.datetime.fromisoformat(timestamp)
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=datetime.timezone.utc)
+        else:
+            updated_at = updated_at.astimezone(datetime.timezone.utc)
     except ValueError:
         return True
 
@@ -206,10 +495,15 @@ def query_nvd_api(cpe_name, results_per_page=200, timeout=30):
         req = urllib.request.Request(url, headers=headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status != 200:
+                logging.warning("NVD API вернул статус %s для %s", resp.status, cpe_name)
                 return None
             data = resp.read()
             return json.loads(data.decode("utf-8"))
-    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, ValueError):
+    except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, json.JSONDecodeError, ValueError) as e:
+        logging.warning("Ошибка запроса NVD API для %s: %s", cpe_name, e)
+        return None
+    except Exception as e:
+        logging.exception("Неожиданная ошибка при запросе NVD API для %s", cpe_name)
         return None
 
 
@@ -270,7 +564,7 @@ def fetch_nvd_cve_db(timeout=30):
     return {"data": cve_data, "meta": {"source": "nvd", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
 
 
-def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True):
+def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True, cve_source=None):
     local = load_local_cve_db()
 
     def save_and_return(db, src):
@@ -279,24 +573,45 @@ def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True):
         save_local_cve_db(db)
         return db
 
+    def try_online_sources():
+        if cve_source == "local":
+            return load_cvelist_v5_local()
+
+        if cve_source in (None, "all", "nvd"):
+            remote = fetch_nvd_cve_db()
+            if remote:
+                return save_and_return(remote, "nvd")
+
+        if cve_source in (None, "all", "cvelistv5"):
+            remote = fetch_cvelist_v5_db()
+            if remote:
+                return save_and_return(remote, "cvelistv5")
+
+        if cve_source in (None, "all", "local"):
+            local_remote = load_cvelist_v5_local()
+            if local_remote:
+                return save_and_return(local_remote, "cvelistv5-local")
+
+        return None
+
     if force_update and allow_online:
-        remote = fetch_nvd_cve_db()
-        if remote:
-            return save_and_return(remote, "nvd")
+        online = try_online_sources()
+        if online:
+            return online
 
     if local:
         meta = local.get("meta", {})
         stale = is_cve_db_stale(meta, ttl_days)
         if stale and allow_online:
-            remote = fetch_nvd_cve_db()
-            if remote:
-                return save_and_return(remote, "nvd")
+            online = try_online_sources()
+            if online:
+                return online
         return local
 
     if allow_online:
-        remote = fetch_nvd_cve_db()
-        if remote:
-            return save_and_return(remote, "nvd")
+        online = try_online_sources()
+        if online:
+            return online
 
     return {"data": CVE_SERVICE_DB, "meta": {"source": "builtin", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()}}
 
@@ -336,13 +651,19 @@ def run_command(cmd):
         result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
             check=False,
         )
-    except OSError:
+        if result.returncode != 0:
+            logging.warning("Команда %s вернула код %s: %s", cmd, result.returncode, result.stderr.strip())
+        return result.stdout or ""
+    except OSError as e:
+        logging.warning("Не удалось выполнить команду %s: %s", cmd, e)
         return ""
-    return result.stdout or ""
+    except Exception as e:
+        logging.exception("Неожиданная ошибка при выполнении команды %s", cmd)
+        return ""
 
 
 def skip_path(path):
@@ -387,11 +708,13 @@ def unique_items(items):
 
 
 def level_name(level):
-    if level == "high":
-        return "HIGH"
-    if level == "medium":
-        return "MEDIUM"
-    return "LOW"
+    return {
+        "critical": "CRITICAL",
+        "high": "HIGH",
+        "medium": "MEDIUM",
+        "low": "LOW",
+        "info": "INFO",
+    }.get(str(level).lower(), str(level).upper() if level else "UNKNOWN")
 
 
 def looks_sensitive(path):
@@ -492,12 +815,34 @@ def check_permissions():
     return unique_items(items)
 
 
-def has_drop_rule(port):
+_iptables_drop_rules_cache = None
+
+def _load_iptables_drop_rules():
+    global _iptables_drop_rules_cache
+    _iptables_drop_rules_cache = set()
     data = run_command(["sudo", "iptables", "-L", "INPUT", "-n"])
     for line in data.splitlines():
-        if f"dpt:{port}" in line and "DROP" in line:
-            return True
-    return False
+        if "DROP" not in line:
+            continue
+        m = re.search(r"dpt:(\d+)", line)
+        if not m:
+            continue
+        try:
+            _iptables_drop_rules_cache.add(int(m.group(1)))
+        except ValueError:
+            continue
+    return _iptables_drop_rules_cache
+
+
+def has_drop_rule(port):
+    global _iptables_drop_rules_cache
+    if _iptables_drop_rules_cache is None:
+        try:
+            _load_iptables_drop_rules()
+        except Exception as e:
+            logging.warning("Не удалось получить правила iptables: %s", e)
+            _iptables_drop_rules_cache = set()
+    return port in _iptables_drop_rules_cache
 
 
 def check_ports():
@@ -515,7 +860,14 @@ def check_ports():
         if not match:
             continue
 
-        port = int(match.group(1))
+        try:
+            port = int(match.group(1))
+        except (TypeError, ValueError):
+            continue
+
+        if port <= 0 or port > 65535:
+            continue
+
         if has_drop_rule(port):
             continue  # Порт заблокирован firewall'ом, пропускаем
 

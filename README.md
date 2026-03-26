@@ -160,6 +160,7 @@ sudo python auditor.py -o audit_result
 - `--cve-update` - принудительно обновить базу
 - `--cve-cache-days N` - кэшированная актуальность N дней
 - `--no-cve-online` - использовать локальный/встроенный режим
+- `--cve-source [nvd|cvelistv5|local|builtin|all]` - выбрать источник CVE
 
 URL по умолчанию: NVD API (через CPE map) при запросе.
 
