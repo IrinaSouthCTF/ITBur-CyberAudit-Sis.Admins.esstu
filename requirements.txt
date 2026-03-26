@@ -1,0 +1,6 @@
+# Для GUI интерфейса (опционально)
+# На Linux рекомендуется: sudo apt install python3-pyqt5
+PyQt5>=5.15.0
+
+# Для работы с путями (уже в Python 3.4+)
+# pathlib is built-in
