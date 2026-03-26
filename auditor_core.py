@@ -1,5 +1,6 @@
 import argparse
 import datetime
+import glob
 import json
 import logging
 import os
@@ -118,17 +119,13 @@ CVE_SERVICE_DB = {
 }
 
 CVE_DB_FILENAME = "cve_db.json"
-# Основной репозиторий cveproject (GitHub raw)
-CVELIST_V5_BASE = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
-# Вариант через proxy для РФ
-CVELIST_V5_PROXY = "https://ghproxy.com/https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
-# Файловый путь локального клона cvelistV5
-CVELIST_LOCAL_PATH = os.environ.get("CVELOCAL_PATH", "/opt/cvelistV5/cves")
-# Источник MITRE (cve.org)
-MITRE_DATA_URL = "https://cve.mitre.org/data/downloads/allitems.json.zip"
-MITRE_LOCAL_PATH = os.environ.get("CVE_MITRE_LOCAL_PATH", "/opt/cve_mitre")
+# Локальная директория cvelistV5 (можно указать через CVELOCAL_PATH)
+CVELIST_LOCAL_PATH = os.environ.get("CVELOCAL_PATH", "./cves")
+# GitHub raw base URL для cvelistV5 (парсинг без клонирования)
+CVELIST_V5_BASE = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main"
+CVELIST_V5_PROXY = "https://ghproxy.com/https://raw.githubusercontent.com/CVEProject/cvelistV5/main"
+# Если скачаем MITRE allitems.json, то можно указать директорию с файлом
 MITRE_LOCAL_FILE = "allitems.json"
-# Носитель ключа: переменная окружения NVD_API_KEY (необязательна, но рекомендуется)
 
 CVE_DB_TTL_DAYS = 7
 CPE_MAP = {
@@ -204,6 +201,14 @@ def load_json_file(path):
     except Exception as e:
         logging.warning("Не удалось загрузить локальный JSON %s: %s", path, e)
         return None
+
+
+def normalize_github_cvelist_url(url):
+    if not isinstance(url, str) or not url:
+        return url
+    if url.startswith("https://github.com/") and "/blob/" in url:
+        return url.replace("https://github.com/", "https://raw.githubusercontent.com/").replace("/blob/", "/")
+    return url
 
 
 def parse_cvelist_v5_to_service_db(cvelist_json):
@@ -476,8 +481,10 @@ def fetch_mitre_cve_db(timeout=30):
 
 
 def fetch_cvelist_v5_db(timeout=30):
-    # Пытаемся получить свежие CVE из cvelistV5 через delta.json
+    # Парсим свежие CVE из cvelistV5 прямо с GitHub (raw content) без полного клонирования.
     candidate_paths = [
+        "cves/delta.json",
+        "cves/deltaLog.json",
         "delta.json",
         "deltaLog.json",
     ]
@@ -486,29 +493,31 @@ def fetch_cvelist_v5_db(timeout=30):
         for suffix in candidate_paths:
             url = f"{base}/{suffix}"
             data = load_json_url(url, timeout=timeout)
-            if not data:
+            if not isinstance(data, dict):
                 continue
 
-            if suffix.endswith("delta.json") and isinstance(data, dict):
-                # Собираем ссылки на конкретные CVE записи
-                changes = []
-                changes.extend(data.get("new", []))
-                changes.extend(data.get("updated", []))
+            # В delta.json и deltaLog.json описаны изменённые/новые CVE
+            changes = []
+            changes.extend(data.get("new", []))
+            changes.extend(data.get("updated", []))
 
-                if not changes:
-                    continue
-
+            if changes:
                 mapped = {}
-                max_fetch = 150
+                max_fetch = 250
                 for idx, entry in enumerate(changes):
                     if idx >= max_fetch:
                         break
-                    github_link = entry.get("githubLink")
+                    github_link = entry.get("githubLink") or entry.get("url")
                     if not github_link:
                         continue
+                    github_link = normalize_github_cvelist_url(github_link)
+                    if not github_link:
+                        continue
+
                     cve_payload = load_json_url(github_link, timeout=timeout)
                     if not cve_payload:
                         continue
+
                     item_data = parse_cvelist_v5_to_service_db(cve_payload)
                     for port, entries in item_data.items():
                         mapped.setdefault(port, []).extend(entries)
@@ -516,15 +525,16 @@ def fetch_cvelist_v5_db(timeout=30):
                 if mapped:
                     return {
                         "data": mapped,
-                        "meta": {"source": f"cvelistv5:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                        "meta": {"source": f"cvelistv5-github:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
                     }
-            else:
-                mapped = parse_cvelist_v5_to_service_db(data)
-                if mapped:
-                    return {
-                        "data": mapped,
-                        "meta": {"source": f"cvelistv5:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
-                    }
+
+            # Иногда в этих файлах содержится полный набор или прямой CVE item
+            mapped = parse_cvelist_v5_to_service_db(data)
+            if mapped:
+                return {
+                    "data": mapped,
+                    "meta": {"source": f"cvelistv5-github:{suffix}", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+                }
 
     return None
 
