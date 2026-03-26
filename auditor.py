@@ -1,7 +1,6 @@
 import os
 import sys
 
-
 def main():
     # Проверяем, можем ли запустить GUI
     can_use_gui = False
