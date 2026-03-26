@@ -150,21 +150,40 @@ sudo python auditor.py -o audit_result
 
 ```
 
-## Автоматическое обновление CVE-базы
+## CVE — уязвимости в открытых сервисах
 
-Программа поддерживает хранение базы в `cve_db.json` рядом с `auditor_core.py`.
-Файл синхронизируется с внешним URL при первом запуске и при устаревании (по умолчанию 7 дней).
+Программа поддерживает кэширование базы CVE в `cve_db.json` рядом с `auditor_core.py`.
+При первом запуске и при устаревании кэша (по умолчанию 7 дней) файл синхронизируется с внешними источниками.
 
-Команды:
-- `--cve` - включить проверку CVE
-- `--cve-update` - принудительно обновить базу
-- `--cve-cache-days N` - кэшированная актуальность N дней
-- `--no-cve-online` - использовать локальный/встроенный режим
-- `--cve-source [nvd|cvelistv5|local|builtin|all]` - выбрать источник CVE
+### Команды для работы с CVE:
+- `--cve` — включить проверку CVE по открытым портам и сервисам
+- `--cve-update` — принудительно обновить базу CVE с внешних источников
+- `--cve-cache-days N` — минимальный период актуальности локального кэша (по умолчанию 7 дней)
+- `--no-cve-online` — использовать только кэш/встроенный список, не запрашивать интернет
+- `--cve-source [mitre|cvelistv5|local|builtin|all]` — выбрать приоритетный источник CVE
 
-URL по умолчанию: NVD API (через CPE map) при запросе.
+### Поддерживаемые источники CVE:
+- **cvelistv5** — CVE List (версия V5) с GitHub raw, включает delta.json обновления
+- **mitre** — MITRE ATT&CK CVE данные
+- **local** — локально клонированный репозиторий cvelistV5 (если доступен через CVELOCAL_PATH)
+- **builtin** — встроенная статическая база (для работы без интернета)
 
-Если в `cve_db.json` υπάρχει локальный кэш, программа будет использовать его.
+Если локальный кэш `cve_db.json` существует, программа автоматически использует его.
+
+### Примеры использования:
+```bash
+# Проверка с основным источником cvelistv5
+python auditor.py --nogui --cve --cve-source cvelistv5
+
+# Проверка с MITRE источником
+python auditor.py --nogui --cve --cve-source mitre
+
+# Работа без сетевого доступа (использует встроенную базу)
+python auditor.py --nogui --cve --no-cve-online --cve-source builtin
+
+# Обновить кэш и пересканировать
+python auditor.py --nogui --cve --cve-update
+```
 
 Формат `cve_db.json`:
 
@@ -181,4 +200,41 @@ URL по умолчанию: NVD API (через CPE map) при запросе.
   }
 }
 ```
+
+## Desktop Launcher (Linux только)
+
+Для удобного запуска из меню приложений в Linux (Debian/Kali) можно использовать `.desktop` файл.
+
+### Установка:
+
+1. Создайте файл `~/.local/share/applications/linux-auditor.desktop`:
+
+```ini
+[Desktop Entry]
+Type=Application
+Name=Linux Auditor
+Comment=System security audit tool
+Exec=python3 /полный/путь/к/auditor.py --nogui --cve --output ~/audit_report.txt
+Icon=/полный/путь/к/app.ico
+Terminal=false
+Categories=System;Security;Utility
+```
+
+2. Замените `/полный/путь/к/` на абсолютный путь до директории проекта.
+
+3. Сделайте файл исполняемым:
+```bash
+chmod +x ~/.local/share/applications/linux-auditor.desktop
+```
+
+Приложение появится в меню "Приложения" / "Системные инструменты" и может быть запущено одним кликом.
+
+### Альтернатива (установка на уровне системы):
+
+Для установки на уровне всей системы скопируйте файл в:
+```bash
+cp linux-auditor.desktop /usr/share/applications/
+```
+
+(требует прав администратора)
 
