@@ -34,9 +34,9 @@ def parse_args():
     )
     parser.add_argument(
         "--cve-source",
-        choices=["nvd", "cvelistv5", "local", "builtin", "all"],
+        choices=["mitre", "cvelistv5", "local", "builtin", "all"],
         default="all",
-        help="Источник CVE: nvd, cvelistv5, local (клонированный cvelistV5), builtin (статический), all (попытка всех)",
+        help="Источник CVE: mitre, cvelistv5, local (клонированный cvelistV5), builtin (статический), all (попытка всех)",
     )
     parser.add_argument(
         "--no-cve-online",

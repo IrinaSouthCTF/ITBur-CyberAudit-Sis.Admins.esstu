@@ -118,14 +118,16 @@ CVE_SERVICE_DB = {
 }
 
 CVE_DB_FILENAME = "cve_db.json"
-# Публичный NVD API
-NVD_API_URL = "https://services.nvd.nist.gov/rest/json/cves/1.0"
 # Основной репозиторий cveproject (GitHub raw)
 CVELIST_V5_BASE = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
 # Вариант через proxy для РФ
 CVELIST_V5_PROXY = "https://ghproxy.com/https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves"
 # Файловый путь локального клона cvelistV5
 CVELIST_LOCAL_PATH = os.environ.get("CVELOCAL_PATH", "/opt/cvelistV5/cves")
+# Источник MITRE (cve.org)
+MITRE_DATA_URL = "https://cve.mitre.org/data/downloads/allitems.json.zip"
+MITRE_LOCAL_PATH = os.environ.get("CVE_MITRE_LOCAL_PATH", "/opt/cve_mitre")
+MITRE_LOCAL_FILE = "allitems.json"
 # Носитель ключа: переменная окружения NVD_API_KEY (необязательна, но рекомендуется)
 
 CVE_DB_TTL_DAYS = 7
@@ -322,6 +324,155 @@ def parse_cvelist_v5_to_service_db(cvelist_json):
             result.setdefault(port, []).append(entry)
 
     return result
+
+
+def parse_mitre_cpe_uri(cpe_uri):
+    if not isinstance(cpe_uri, str) or not cpe_uri.startswith("cpe:2.3:"):
+        return None
+    parts = cpe_uri.split(":")
+    if len(parts) < 6:
+        return None
+    vendor = parts[3].lower().strip()
+    product = parts[4].lower().strip()
+    if not vendor or not product:
+        return None
+    return f"{vendor}:{product}"
+
+
+def parse_mitre_feed_to_service_db(mitre_json):
+    if not isinstance(mitre_json, dict):
+        return {}
+
+    cve_items = []
+    if "CVE_data_Mitre" in mitre_json and isinstance(mitre_json.get("CVE_data_Mitre", {}).get("CVE_Items"), list):
+        cve_items = mitre_json.get("CVE_data_Mitre", {}).get("CVE_Items", [])
+    elif "CVE_Items" in mitre_json:
+        cve_items = mitre_json.get("CVE_Items", [])
+
+    if not cve_items:
+        return {}
+
+    result = {}
+    cpe_to_port = {v: k for k, v in CPE_MAP.items()}
+
+    for item in cve_items:
+        if not isinstance(item, dict):
+            continue
+
+        cve_meta = item.get("cve", {}).get("CVE_data_meta", {})
+        cve_id = cve_meta.get("ID")
+        if not cve_id:
+            continue
+
+        desc = "Неизвестная уязвимость"
+        desclist = item.get("cve", {}).get("description", {}).get("description_data", [])
+        if isinstance(desclist, list) and desclist:
+            desc = next((x.get("value") for x in desclist if x.get("value")), desc)
+
+        score = None
+        if item.get("impact"):
+            impact = item.get("impact", {})
+            if "baseMetricV3" in impact and impact["baseMetricV3"].get("cvssV3"):
+                score = impact["baseMetricV3"]["cvssV3"].get("baseScore")
+            elif "baseMetricV2" in impact and impact["baseMetricV2"].get("cvssV2"):
+                score = impact["baseMetricV2"]["cvssV2"].get("baseScore")
+
+        level = cve_score_to_level(score)
+
+        known_ports = set()
+        cpe_nodes = item.get("configurations", {}).get("nodes", [])
+        for node in cpe_nodes:
+            for cpe_match in node.get("cpe_match", []):
+                cpe23 = cpe_match.get("cpe23Uri")
+                cpe_key = parse_mitre_cpe_uri(cpe23)
+                if not cpe_key:
+                    continue
+                for known_cpe, port in cpe_to_port.items():
+                    if cpe_key.startswith(known_cpe):
+                        known_ports.add(port)
+
+        if not known_ports:
+            for port, keywords in SERVICE_KEYWORDS.items():
+                text = (item.get("cve", {}).get("problemtype", {}).get("problemtype_data", []) or [])
+                if isinstance(text, list):
+                    text = " ".join(str(x) for x in text)
+                for keyword in keywords:
+                    if keyword in desc.lower() or keyword in str(text).lower():
+                        known_ports.add(port)
+                        break
+
+        for port in known_ports:
+            service_name = CPE_MAP.get(port, "unknown")
+            entry = {
+                "id": cve_id,
+                "service": service_name,
+                "level": level,
+                "description": desc,
+                "recommendation": "Проверьте обновления и конфигурацию сервиса.",
+            }
+            result.setdefault(port, []).append(entry)
+
+    return result
+
+
+def load_mitre_local(local_path=None):
+    local_path = local_path or MITRE_LOCAL_PATH
+    if not local_path:
+        return None
+
+    local_file = os.path.join(local_path, MITRE_LOCAL_FILE)
+    if not os.path.exists(local_file):
+        return None
+
+    data = load_json_file(local_file)
+    if not data:
+        return None
+
+    mapped = parse_mitre_feed_to_service_db(data)
+    if not mapped:
+        return None
+
+    return {
+        "data": mapped,
+        "meta": {"source": "mitre-local", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+    }
+
+
+def fetch_mitre_cve_db(timeout=30):
+    # Локальное хранилище приоритетно
+    local_result = load_mitre_local()
+    if local_result:
+        return local_result
+
+    try:
+        req = urllib.request.Request(MITRE_DATA_URL, headers={"User-Agent": "LinuxAuditor/1.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status != 200:
+                logging.warning("MITRE feed %s вернул статус %s", MITRE_DATA_URL, resp.status)
+                return None
+            content = resp.read()
+    except Exception as e:
+        logging.warning("Не удалось скачать MITRE feed %s: %s", MITRE_DATA_URL, e)
+        return None
+
+    try:
+        import io, zipfile
+
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            with zf.open(MITRE_LOCAL_FILE) as f:
+                data = json.load(f)
+    except Exception as e:
+        logging.warning("Ошибка при чтении MITRE ZIP %s: %s", MITRE_DATA_URL, e)
+        return None
+
+    mapped = parse_mitre_feed_to_service_db(data)
+    if not mapped:
+        return None
+
+    return {
+        "data": mapped,
+        "meta": {"source": "mitre", "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()},
+    }
 
 
 def fetch_cvelist_v5_db(timeout=30):
@@ -578,6 +729,11 @@ def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True, 
             local_remote = load_cvelist_v5_local()
             if local_remote:
                 return save_and_return(local_remote, "cvelistv5-local")
+
+        if cve_source in (None, "all", "mitre"):
+            mitre_remote = fetch_mitre_cve_db()
+            if mitre_remote:
+                return save_and_return(mitre_remote, "mitre")
 
         if cve_source in (None, "all", "cvelistv5"):
             remote = fetch_cvelist_v5_db()
