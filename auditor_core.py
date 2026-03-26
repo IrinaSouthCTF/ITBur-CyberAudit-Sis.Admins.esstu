@@ -574,23 +574,15 @@ def get_cve_db(force_update=False, ttl_days=CVE_DB_TTL_DAYS, allow_online=True, 
         return db
 
     def try_online_sources():
-        if cve_source == "local":
-            return load_cvelist_v5_local()
-
-        if cve_source in (None, "all", "nvd"):
-            remote = fetch_nvd_cve_db()
-            if remote:
-                return save_and_return(remote, "nvd")
+        if cve_source in (None, "all", "local"):
+            local_remote = load_cvelist_v5_local()
+            if local_remote:
+                return save_and_return(local_remote, "cvelistv5-local")
 
         if cve_source in (None, "all", "cvelistv5"):
             remote = fetch_cvelist_v5_db()
             if remote:
                 return save_and_return(remote, "cvelistv5")
-
-        if cve_source in (None, "all", "local"):
-            local_remote = load_cvelist_v5_local()
-            if local_remote:
-                return save_and_return(local_remote, "cvelistv5-local")
 
         return None
 
